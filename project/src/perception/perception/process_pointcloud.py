@@ -1,6 +1,5 @@
 import rclpy
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 from sensor_msgs.msg import PointCloud2
 from geometry_msgs.msg import PoseStamped
 import numpy as np
@@ -10,149 +9,157 @@ from rclpy.time import Time
 from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
 from rcl_interfaces.msg import SetParametersResult
 
+
 class RealSensePCSubscriber(Node):
     def __init__(self):
         super().__init__('realsense_pc_subscriber')
-        
-        # --- SPATIAL PARAMETERS (Bounding Box) ---
-        self.target_frame = self.declare_parameter('camera_depth_optical_frame', 'base_link').value
+
+        self.target_frame = self.declare_parameter(
+            'camera_depth_optical_frame', 'base_link'
+        ).value
+
         self.max_y = float(self.declare_parameter('max_y', 0.67).value)
         self.min_z = float(self.declare_parameter('min_z', -0.18).value)
         self.max_z = float(self.declare_parameter('max_z', -0.15).value)
 
-        # --- COLOR PARAMETERS (Defaults set for a bright RED block) ---
-        self.r_min = int(self.declare_parameter('r_min', 150).value)
-        self.r_max = int(self.declare_parameter('r_max', 255).value)
-        self.g_min = int(self.declare_parameter('g_min', 0).value)
-        self.g_max = int(self.declare_parameter('g_max', 100).value)
-        self.b_min = int(self.declare_parameter('b_min', 0).value)
-        self.b_max = int(self.declare_parameter('b_max', 100).value)
-
-        self.add_on_set_parameters_callback(self._on_parameter_update)
-
-        # --- TF SETUP ---
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        # --- SUBSCRIBERS & PUBLISHERS ---
         self.pc_sub = self.create_subscription(
             PointCloud2,
             '/camera/camera/depth/color/points',
             self.pointcloud_callback,
             10
         )
-        self.cube_pose_pub = self.create_publisher(PoseStamped, '/cube_pose', 1)
-        self.filtered_points_pub = self.create_publisher(PointCloud2, '/filtered_points', 1)
 
-        self.get_logger().info("Subscribed to PointCloud2. Color Filtering & PCA Pose publisher ready.")
+        self.filtered_points_pub = self.create_publisher(
+            PointCloud2, '/filtered_points', 1
+        )
+
+        self.pub_red = None
+        self.pub_blue = None
+        self.pub_green = None
+
+        self.add_on_set_parameters_callback(self._on_parameter_update)
+
+        self.get_logger().info("Multi-color point cloud tracker initialized.")
 
     def pointcloud_callback(self, msg: PointCloud2):
-        source_frame = msg.header.frame_id 
         try:
-            tf = self.tf_buffer.lookup_transform(self.target_frame, source_frame, Time())
+            tf = self.tf_buffer.lookup_transform(
+                self.target_frame,
+                msg.header.frame_id,
+                Time()
+            )
         except TransformException as ex:
-            self.get_logger().warn(f'Could not transform {source_frame} to {self.target_frame}: {ex}')
+            self.get_logger().warn(f"TF error: {ex}")
             return
 
-        transformed_cloud = do_transform_cloud(msg, tf)
+        cloud = do_transform_cloud(msg, tf)
 
-        # 1. READ POINTS (Including RGB)
-        raw_points = pc2.read_points(
-            transformed_cloud,
+        raw = pc2.read_points(
+            cloud,
             field_names=('x', 'y', 'z', 'rgb'),
-            skip_nans=True,
+            skip_nans=True
         )
-        
-        points_xyz = np.column_stack(
-                (raw_points['x'], raw_points['y'], raw_points['z'])
-            ).astype(np.float32, copy=False)
 
-        # 2. UNPACK RGB
-        rgb_floats = raw_points['rgb']
-        rgb_bytes = rgb_floats.view(np.uint32)
-        r = (rgb_bytes >> 16) & 255
-        g = (rgb_bytes >> 8) & 255
-        b = rgb_bytes & 255
+        xyz = np.column_stack(
+            (raw['x'], raw['y'], raw['z'])
+        ).astype(np.float32, copy=False)
 
-        # 3. CREATE MASKS
-        # Color Mask
-        color_mask = (
-            (r >= self.r_min) & (r <= self.r_max) &
-            (g >= self.g_min) & (g <= self.g_max) &
-            (b >= self.b_min) & (b <= self.b_max)
-        )
-        # Spatial Mask
+        rgb = raw['rgb'].view(np.uint32)
+        r = (rgb >> 16) & 255
+        g = (rgb >> 8) & 255
+        b = rgb & 255
+
         spatial_mask = (
-            (points_xyz[:, 1] <= self.max_y) & 
-            (points_xyz[:, 2] <= self.max_z) & 
-            (points_xyz[:, 2] >= self.min_z)
+            (xyz[:, 1] <= self.max_y) &
+            (xyz[:, 2] <= self.max_z) &
+            (xyz[:, 2] >= self.min_z)
         )
 
-        # Combine and Filter
-        filtered_points = points_xyz[spatial_mask & color_mask]
+        masks = {
+            "red": (r > 150) & (g < 100) & (b < 100),
+            "blue": (b > 150) & (r < 100) & (g < 100),
+            "green": (g > 150) & (r < 100) & (b < 100)
+        }
 
-        if len(filtered_points) < 50:
-            # Silently return if no target block is found to prevent log spam
+        for color, color_mask in masks.items():
+            self.process_object(color, cloud, xyz, spatial_mask & color_mask)
+
+    def process_object(self, color, cloud, xyz, mask):
+        pts = xyz[mask]
+
+        if len(pts) < 50:
             return
 
-        # 4. STATISTICAL OUTLIER REJECTION
-        mean_pt = np.mean(filtered_points, axis=0)
-        std_pt = np.std(filtered_points, axis=0)
-        std_pt[std_pt == 0] = 1e-6 # Prevent div by zero
-        
-        z_scores = np.abs((filtered_points - mean_pt) / std_pt)
-        clean_mask = (z_scores[:, 0] < 2.0) & (z_scores[:, 1] < 2.0) & (z_scores[:, 2] < 2.0)
-        clean_points = filtered_points[clean_mask]
+        mean = np.mean(pts, axis=0)
+        std = np.std(pts, axis=0)
+        std[std == 0] = 1e-6
 
-        if len(clean_points) < 50:
+        z = np.abs((pts - mean) / std)
+        clean_mask = (z[:, 0] < 2.0) & (z[:, 1] < 2.0) & (z[:, 2] < 2.0)
+        clean = pts[clean_mask]
+
+        if len(clean) < 50:
             return
 
-        # Republish clean cloud for RViz
-        filtered_cloud = pc2.create_cloud_xyz32(transformed_cloud.header, clean_points.tolist())
+        filtered_cloud = pc2.create_cloud_xyz32(
+            cloud.header,
+            clean.tolist()
+        )
         self.filtered_points_pub.publish(filtered_cloud)
 
-        # 5. COMPUTE CENTROID & PCA
-        centroid = np.mean(clean_points, axis=0)
-        xy_points = clean_points[:, :2]
-        centered_xy = xy_points - centroid[:2]
-        
-        cov_matrix = np.cov(centered_xy.T)
-        eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
-        principal_vector = eigenvectors[:, np.argmax(eigenvalues)]
-        
-        yaw = np.arctan2(principal_vector[1], principal_vector[0])
+        centroid = np.mean(clean, axis=0)
 
-        # 6. CONVERT YAW TO QUATERNION & PUBLISH
-        half_yaw = yaw / 2.0
-        pose_msg = PoseStamped()
-        pose_msg.header = transformed_cloud.header
-        
-        pose_msg.pose.position.x = float(centroid[0])
-        pose_msg.pose.position.y = float(centroid[1])
-        pose_msg.pose.position.z = float(centroid[2])
-        
-        pose_msg.pose.orientation.x = 0.0
-        pose_msg.pose.orientation.y = 0.0
-        pose_msg.pose.orientation.z = float(np.sin(half_yaw))
-        pose_msg.pose.orientation.w = float(np.cos(half_yaw))
+        xy = clean[:, :2]
+        xy_centered = xy - centroid[:2]
 
-        self.cube_pose_pub.publish(pose_msg)
+        cov = np.cov(xy_centered.T)
+        eigvals, eigvecs = np.linalg.eig(cov)
+
+        principal = eigvecs[:, np.argmax(eigvals)]
+        yaw = np.arctan2(principal[1], principal[0])
+
+        pose = PoseStamped()
+        pose.header = cloud.header
+
+        pose.pose.position.x = float(centroid[0])
+        pose.pose.position.y = float(centroid[1])
+        pose.pose.position.z = float(centroid[2])
+
+        half = yaw / 2.0
+        pose.pose.orientation.x = 0.0
+        pose.pose.orientation.y = 0.0
+        pose.pose.orientation.z = float(np.sin(half))
+        pose.pose.orientation.w = float(np.cos(half))
+
+        if color == "red":
+            if self.pub_red is None:
+                self.pub_red = self.create_publisher(PoseStamped, '/cube_pose_red', 1)
+            self.pub_red.publish(pose)
+
+        elif color == "blue":
+            if self.pub_blue is None:
+                self.pub_blue = self.create_publisher(PoseStamped, '/cube_pose_blue', 1)
+            self.pub_blue.publish(pose)
+
+        elif color == "green":
+            if self.pub_green is None:
+                self.pub_green = self.create_publisher(PoseStamped, '/cube_pose_green', 1)
+            self.pub_green.publish(pose)
 
     def _on_parameter_update(self, params):
-        # Update dynamically without restarting the node!
-        for param in params:
-            if param.name == 'min_z': self.min_z = float(param.value)
-            elif param.name == 'max_z': self.max_z = float(param.value)
-            elif param.name == 'max_y': self.max_y = float(param.value)
-            elif param.name == 'r_min': self.r_min = int(param.value)
-            elif param.name == 'r_max': self.r_max = int(param.value)
-            elif param.name == 'g_min': self.g_min = int(param.value)
-            elif param.name == 'g_max': self.g_max = int(param.value)
-            elif param.name == 'b_min': self.b_min = int(param.value)
-            elif param.name == 'b_max': self.b_max = int(param.value)
-        
-        self.get_logger().info("Parameters updated!")
+        for p in params:
+            if p.name == 'min_z':
+                self.min_z = float(p.value)
+            elif p.name == 'max_z':
+                self.max_z = float(p.value)
+            elif p.name == 'max_y':
+                self.max_y = float(p.value)
+
         return SetParametersResult(successful=True)
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -160,6 +167,7 @@ def main(args=None):
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
