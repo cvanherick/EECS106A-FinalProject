@@ -13,17 +13,15 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='ee106a-abh',
-    maintainer_email='cvanherick@berkeley.edu',
+    maintainer='ee106a-tah',
+    maintainer_email='danielmunicio360@gmail.com',
     description='TODO: Package description',
     license='TODO: License declaration',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'process_pointcloud = perception.process_pointcloud:main',
+            'interactive_plane = perception.interactive_plane:main',
         ],
     },
 )
