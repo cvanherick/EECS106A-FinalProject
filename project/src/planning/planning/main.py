@@ -84,6 +84,9 @@ class UR7e_CubeGrasp(Node):
             qw=float(q_final[3])
         )
         if pre_grasp_joints:
+            idx = pre_grasp_joints.name.index('wrist_3_joint')
+            pre_grasp_joints.position[idx] += np.pi / 2.0
+
             self.job_queue.append(pre_grasp_joints)
 
         print(cube_pose.pose.position.x, cube_pose.pose.position.y, cube_pose.pose.position.z)
