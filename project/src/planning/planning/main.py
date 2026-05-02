@@ -19,7 +19,7 @@ from planning.ik import IKPlanner
 class UR7e_CubeGrasp(Node):
     def __init__(self):
         super().__init__('cube_grasp')
-
+        self.rotation_applied = False
         self.cube_pub = self.create_subscription(PoseStamped, '/cube_pose_red', self.cube_callback, 1)
         self.joint_state_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 1)
 
@@ -45,6 +45,7 @@ class UR7e_CubeGrasp(Node):
         if self.cube_pose is not None:
             return
 
+        self.rotation_applied = False
         if self.joint_state is None:
             self.get_logger().info("No joint state yet, cannot proceed")
             return
@@ -84,8 +85,10 @@ class UR7e_CubeGrasp(Node):
             qw=float(q_final[3])
         )
         if pre_grasp_joints:
-            idx = pre_grasp_joints.name.index('wrist_3_joint')
-            pre_grasp_joints.position[idx] += np.pi / 2.0
+            if self.rotation_applied == False:
+                self.rotation_applied = True
+                idx = pre_grasp_joints.name.index('wrist_3_joint')
+                pre_grasp_joints.position[idx] += np.pi / 2.0
 
             self.job_queue.append(pre_grasp_joints)
 
