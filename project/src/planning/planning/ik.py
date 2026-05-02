@@ -72,12 +72,17 @@ class IKPlanner(Node):
             msg.pose.orientation.w
         ])
 
-        # Create a rotation that keeps the gripper pointing down (pitch -90°)
-        # but rotates around Z axis to align with the principal axis
-        q_pitch_down = R.from_euler('y', np.pi / 2)  # Pitch down 90°
+        # Convert to Euler angles to extract just the Z yaw
+        euler = q_principal.as_euler('xyz')
+        yaw_angle = euler[2]  # Z rotation (yaw)
 
-        # Combine: first rotate to point down, then yaw to align with principal axis
-        q_final = q_principal * q_pitch_down
+        # Create rotation: pitch down 90° around Y, then yaw around Z
+        # Apply in order: first pitch down, then yaw to align with principal axis
+        q_pitch_down = R.from_euler('y', np.pi / 2)  # Pitch down 90°
+        q_yaw = R.from_euler('z', yaw_angle)  # Yaw to align with principal axis
+        
+        # Combine: pitch down first, then apply yaw
+        q_final = q_yaw * q_pitch_down
 
         q_final_quat = q_final.as_quat()
 
