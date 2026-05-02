@@ -10,6 +10,7 @@ from moveit_msgs.msg import RobotTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import JointState
 from tf2_ros import Buffer, TransformListener
+from geometry_msgs.msg import PoseStamped
 from scipy.spatial.transform import Rotation as R
 import numpy as np
 
@@ -49,7 +50,16 @@ class UR7e_CubeGrasp(Node):
             return
 
         self.cube_pose = cube_pose
+        q = cube_pose.pose.orientation
 
+        # Convert perception quaternion → scipy Rotation
+        q_yaw = R.from_quat([q.x, q.y, q.z, q.w])
+
+        # 90° rotation to point gripper down (same as your IKPlanner)
+        q_down = R.from_quat([0.0, 1.0, 0.0, 0.0])
+
+        # Combine them
+        q_final = (q_yaw * q_down).as_quat()
         # -----------------------------------------------------------
         # TODO: In the following section you will add joint angles to the job queue. 
         # Entries of the job queue should be of type either JointState or String('toggle_grip')
@@ -63,7 +73,16 @@ class UR7e_CubeGrasp(Node):
         z offset: +0.185 (to be above the cube by accounting for gripper length)
         pre-grasp above cube (offsets: x:0, y:0, z:+0.185
         '''        
-        pre_grasp_joints = self.ik_planner.compute_ik(self.joint_state, cube_pose.pose.position.x, cube_pose.pose.position.y, cube_pose.pose.position.z + 0.185)
+        pre_grasp_joints = self.ik_planner.compute_ik(
+            self.joint_state,
+            cube_pose.pose.position.x,
+            cube_pose.pose.position.y,
+            cube_pose.pose.position.z + 0.185,
+            qx=float(q_final[0]),
+            qy=float(q_final[1]),
+            qz=float(q_final[2]),
+            qw=float(q_final[3])
+        )
         if pre_grasp_joints:
             self.job_queue.append(pre_grasp_joints)
 
@@ -76,7 +95,16 @@ class UR7e_CubeGrasp(Node):
         Note that this will again be defined relative to the cube pose. 
         DO NOT CHANGE z offset lower than +0.14. 
         '''
-        grasp_joints = self.ik_planner.compute_ik(self.joint_state, cube_pose.pose.position.x, cube_pose.pose.position.y, cube_pose.pose.position.z + 0.14)
+        grasp_joints = self.ik_planner.compute_ik(
+            self.joint_state,
+            cube_pose.pose.position.x,
+            cube_pose.pose.position.y,
+            cube_pose.pose.position.z + 0.14,
+            qx=float(q_final[0]),
+            qy=float(q_final[1]),
+            qz=float(q_final[2]),
+            qw=float(q_final[3])
+        )
         if grasp_joints:
             self.job_queue.append(grasp_joints)
 
@@ -100,7 +128,17 @@ class UR7e_CubeGrasp(Node):
         We want the release position to be 0.3m to the left of the initial cube pose.
         Which offset will you change to achieve this and in what direction?
         '''
-        release_joints = self.ik_planner.compute_ik(self.joint_state, cube_pose.pose.position.x, cube_pose.pose.position.y + 0.1, cube_pose.pose.position.z + 0.185)
+        release_joints = self.ik_planner.compute_ik(
+                self.joint_state,
+                cube_pose.pose.position.x,
+                cube_pose.pose.position.y + 0.1,
+                cube_pose.pose.position.z + 0.185,
+                qx=float(q_final[0]),
+                qy=float(q_final[1]),
+                qz=float(q_final[2]),
+                qw=float(q_final[3])
+            )
+        
         if release_joints:
             self.job_queue.append(release_joints)
 
