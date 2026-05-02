@@ -5,7 +5,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from control_msgs.action import FollowJointTrajectory
-from geometry_msgs.msg import PointStamped 
+from geometry_msgs.msg import PoseStamped 
 from moveit_msgs.msg import RobotTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import JointState
@@ -19,7 +19,7 @@ class UR7e_CubeGrasp(Node):
     def __init__(self):
         super().__init__('cube_grasp')
 
-        self.cube_pub = self.create_subscription(PointStamped, '/cube_pose', self.cube_callback, 1)
+        self.cube_pub = self.create_subscription(PoseStamped, '/cube_pose_red', self.cube_callback, 1)
         self.joint_state_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 1)
 
         self.exec_ac = ActionClient(
@@ -63,11 +63,11 @@ class UR7e_CubeGrasp(Node):
         z offset: +0.185 (to be above the cube by accounting for gripper length)
         pre-grasp above cube (offsets: x:0, y:0, z:+0.185
         '''        
-        pre_grasp_joints = self.ik_planner.compute_ik(self.joint_state, cube_pose.point.x, cube_pose.point.y, cube_pose.point.z + 0.185)
+        pre_grasp_joints = self.ik_planner.compute_ik(self.joint_state, cube_pose.pose.position.x, cube_pose.pose.position.y, cube_pose.pose.position.z + 0.185)
         if pre_grasp_joints:
             self.job_queue.append(pre_grasp_joints)
 
-        print(cube_pose.point.x, cube_pose.point.y, cube_pose.point.z)
+        print(cube_pose.pose.position.x, cube_pose.pose.position.y, cube_pose.pose.position.z)
 
             
 
@@ -76,7 +76,7 @@ class UR7e_CubeGrasp(Node):
         Note that this will again be defined relative to the cube pose. 
         DO NOT CHANGE z offset lower than +0.14. 
         '''
-        grasp_joints = self.ik_planner.compute_ik(self.joint_state, cube_pose.point.x, cube_pose.point.y, cube_pose.point.z + 0.14)
+        grasp_joints = self.ik_planner.compute_ik(self.joint_state, cube_pose.pose.position.x, cube_pose.pose.position.y, cube_pose.pose.position.z + 0.14)
         if grasp_joints:
             self.job_queue.append(grasp_joints)
 
@@ -95,12 +95,12 @@ class UR7e_CubeGrasp(Node):
 
 
     
-        # 5) Move to releasecube_pose.point.x Position
+        # 5) Move to releasecube_pose.pose.position.x Position
         '''
         We want the release position to be 0.3m to the left of the initial cube pose.
         Which offset will you change to achieve this and in what direction?
         '''
-        release_joints = self.ik_planner.compute_ik(self.joint_state, cube_pose.point.x, cube_pose.point.y + 0.1, cube_pose.point.z + 0.185)
+        release_joints = self.ik_planner.compute_ik(self.joint_state, cube_pose.pose.position.x, cube_pose.pose.position.y + 0.1, cube_pose.pose.position.z + 0.185)
         if release_joints:
             self.job_queue.append(release_joints)
 

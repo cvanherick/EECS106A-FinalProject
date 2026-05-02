@@ -1,51 +1,108 @@
+import sys
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 from moveit_msgs.srv import GetPositionIK, GetMotionPlan
 from moveit_msgs.msg import PositionIKRequest, Constraints, JointConstraint
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import JointState
 from builtin_interfaces.msg import Duration
-import sys
-
-
-# Example usage:
-# -------------------------------------------------
-# current joint state (replace with your robot's)
-# current_state = JointState()
-# current_state.name = [
-#     'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
-#     'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
-# ]
-# current_state.position = [0.0, -1.57, 1.57, 0.0, 0.0, 0.0]
-
-# Compute IK for target point
-# ik_solution = node.compute_ik(current_state, 0.4, 0.1, 0.3)
-
-# if ik_solution:
-#     # Plan motion to the found joint configuration
-#     trajectory = node.plan_to_joints(ik_solution)
-#     if trajectory:
-#         node.get_logger().info('Trajectory ready to execute.')
+from scipy.spatial.transform import Rotation as R
 
 
 class IKPlanner(Node):
     def __init__(self):
         super().__init__('ik_planner')
 
-        # ---- Clients ----
-        self.ik_client = self.create_client(GetPositionIK, '/compute_ik')
-        self.plan_client = self.create_client(GetMotionPlan, '/plan_kinematic_path')
+        # Create a callback group that allows multiple threads to run at once
+        self.cb_group = ReentrantCallbackGroup()
+
+        # ---- Clients (Assigned to the callback group) ----
+        self.ik_client = self.create_client(
+            GetPositionIK, '/compute_ik', callback_group=self.cb_group)
+        self.plan_client = self.create_client(
+            GetMotionPlan, '/plan_kinematic_path', callback_group=self.cb_group)
 
         for srv, name in [(self.ik_client, 'compute_ik'),
                           (self.plan_client, 'plan_kinematic_path')]:
             while not srv.wait_for_service(timeout_sec=1.0):
                 self.get_logger().info(f'Waiting for /{name} service...')
+                
+        self.target_pose = None
+        self.is_planning = False
 
-    # -----------------------------------------------------------
-    # TODO: Compute IK for a given (x, y, z) + quat and current robot joint state
-    # -----------------------------------------------------------
-    def compute_ik(self, current_joint_state, x, y, z,
-                   qx=0.0, qy=1.0, qz=0.0, qw=0.0): # Think about why the default quaternion is like this. Why is qy=1?
+        # Create subscribers for all three colors
+        self.subs = []
+        for color in ['red', 'blue', 'green']:
+            self.subs.append(
+                self.create_subscription(
+                    PoseStamped,
+                    f'/cube_pose_{color}',
+                    self.pose_callback,
+                    10
+                )
+            )
+
+        # Timer (Assigned to the callback group so it doesn't block the node)
+        self.timer = self.create_timer(0.5, self.timer_callback, callback_group=self.cb_group)
+
+    def pose_callback(self, msg: PoseStamped):
+        # Just store the newest pose so the timer can process it
+        if not self.is_planning:
+            self.target_pose = msg
+
+    def timer_callback(self):
+        # If there's no pose, or we are already busy computing IK, do nothing
+        if self.target_pose is None or self.is_planning:
+            return
+            
+        self.is_planning = True
+        msg = self.target_pose
+        self.target_pose = None # Clear it out
+        
+        # 1. Extract Position and add a Z-OFFSET
+        x = msg.pose.position.x
+        y = msg.pose.position.y
+        z = msg.pose.position.z + 0.15 # Hover 15cm above the object
+        
+        # 2. Extract your Yaw Quaternion (from Script 1)
+        q_yaw = R.from_quat([
+            msg.pose.orientation.x, 
+            msg.pose.orientation.y, 
+            msg.pose.orientation.z, 
+            msg.pose.orientation.w
+        ])
+        
+        # 3. Create the "Point Down" Quaternion
+        q_down = R.from_quat([0.0, 1.0, 0.0, 0.0]) # qx, qy, qz, qw
+        
+        # 4. Multiply them to combine the rotations
+        q_final = (q_yaw * q_down).as_quat() # Returns [x, y, z, w]
+        
+        # 5. Grab current joint states (Mocked here for testing)
+        current_state = JointState()
+        current_state.name = [
+            'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
+            'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
+        ]
+        current_state.position = [4.722, -1.850, -1.425, -1.405, 1.593, -3.141]
+
+        self.get_logger().info(f"Computing IK for x:{x:.2f}, y:{y:.2f}, z:{z:.2f}")
+        
+        # 6. Run IK!
+        ik_result = self.compute_ik(
+            current_state, x, y, z,
+            qx=float(q_final[0]), qy=float(q_final[1]), qz=float(q_final[2]), qw=float(q_final[3])
+        )
+        
+        if ik_result:
+            self.get_logger().info("IK successful! Ready to plan.")
+            self.plan_to_joints(ik_result)
+            
+        self.is_planning = False
+
+    def compute_ik(self, current_joint_state, x, y, z, qx=0.0, qy=1.0, qz=0.0, qw=0.0):
         pose = PoseStamped()
         pose.header.frame_id = 'base_link'
         pose.pose.position.x = x
@@ -54,19 +111,16 @@ class IKPlanner(Node):
         pose.pose.orientation.x = qx
         pose.pose.orientation.y = qy
         pose.pose.orientation.z = qz
-        pose.pose.orientation.w = qw  # TODO: There are multiple parts/lines to fill here!
-
+        pose.pose.orientation.w = qw 
 
         ik_req = GetPositionIK.Request()
         ik_req.ik_request.pose_stamped = pose
         ik_req.ik_request.robot_state.joint_state = current_joint_state
         ik_req.ik_request.ik_link_name = 'tool0'
-        # TODO: Lookup the format for ik request and build ik_req by filling in necessary parameters. What is your end-effector link name?
         ik_req.ik_request.avoid_collisions = True
         ik_req.ik_request.timeout = Duration(sec=5)
         ik_req.ik_request.group_name = 'ur_manipulator'
         
-
         future = self.ik_client.call_async(ik_req)
         rclpy.spin_until_future_complete(self, future)
 
@@ -82,9 +136,6 @@ class IKPlanner(Node):
         self.get_logger().info('IK solution found.')
         return result.solution.joint_state
 
-    # -----------------------------------------------------------
-    # Plan motion given a desired joint configuration
-    # -----------------------------------------------------------
     def plan_to_joints(self, target_joint_state):
         req = GetMotionPlan.Request()
         req.motion_plan_request.group_name = 'ur_manipulator'
@@ -123,42 +174,19 @@ class IKPlanner(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = IKPlanner()
-
-    # ---------- Test setup ----------
-    current_state = JointState()
-    current_state.name = [
-        'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
-        'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
-    ]
-
-    current_state.position = [4.722, -1.850, -1.425, -1.405, 1.593, -3.141]
-
-    # ---------- Run IK ----------
-    node.get_logger().info("Testing IK computation...")
-    ik_result = node.compute_ik(current_state, 0.125, 0.611, 0.423)
-
-    # ---------- Check correctness ----------
-    if ik_result is None:
-        node.get_logger().error("IK computation returned None.")
-        sys.exit(1)
-
-    if not hasattr(ik_result, "name") or not hasattr(ik_result, "position"):
-        node.get_logger().error("IK result missing required fields (name, position).")
-        sys.exit(1)
-
-    if len(ik_result.name) != len(ik_result.position):
-        node.get_logger().error("IK joint names and positions length mismatch.")
-        sys.exit(1)
-
-    if len(ik_result.name) < 6:
-        node.get_logger().error("IK returned fewer than 6 joints — likely incorrect.")
-        sys.exit(1)
-
-    node.get_logger().info("IK check passed.")
+    node.get_logger().info("IK Planner is running and waiting for cube poses...")
     
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    # Use a MultiThreadedExecutor to allow the timer and the services to run simultaneously
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+    
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
