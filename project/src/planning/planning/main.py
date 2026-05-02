@@ -59,7 +59,7 @@ class UR7e_CubeGrasp(Node):
         q_down = R.from_quat([0.0, 1.0, 0.0, 0.0])
 
         # Combine them
-        q_final = (q_yaw * q_down).as_quat()
+        q_final = (q_down * q_yaw).as_quat()  # Fixed: down first (align yaw to cube), then yaw around world Z
         # -----------------------------------------------------------
         # TODO: In the following section you will add joint angles to the job queue. 
         # Entries of the job queue should be of type either JointState or String('toggle_grip')

@@ -78,7 +78,7 @@ class IKPlanner(Node):
         q_down = R.from_quat([0.0, 1.0, 0.0, 0.0]) # qx, qy, qz, qw
         
         # 4. Multiply them to combine the rotations
-        q_final = (q_yaw * q_down).as_quat() # Returns [x, y, z, w]
+        q_final = (q_down * q_yaw).as_quat()  # Fixed: down first (align yaw to cube), then yaw around world Z
         
         # 5. Grab current joint states (Mocked here for testing)
         current_state = JointState()
