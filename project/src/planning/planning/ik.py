@@ -1,5 +1,5 @@
 import sys
-import np
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
@@ -64,16 +64,22 @@ class IKPlanner(Node):
         y = msg.pose.position.y
         z = msg.pose.position.z + 0.15
 
-        q_yaw = R.from_quat([
+        # Extract the principal axis yaw from the incoming pose
+        q_principal = R.from_quat([
             msg.pose.orientation.x,
             msg.pose.orientation.y,
             msg.pose.orientation.z,
             msg.pose.orientation.w
         ])
 
+        # Create a rotation that keeps the gripper pointing down (pitch -90°)
+        # but rotates around Z axis to align with the principal axis
+        q_pitch_down = R.from_euler('y', np.pi / 2)  # Pitch down 90°
 
-        q_wrist = R.from_euler('z', np.pi/2)
-        q_final = (q_wrist * q_yaw).as_quat()   
+        # Combine: first rotate to point down, then yaw to align with principal axis
+        q_final = q_principal * q_pitch_down
+
+        q_final_quat = q_final.as_quat()
 
         current_state = JointState()
         current_state.name = [
@@ -84,10 +90,10 @@ class IKPlanner(Node):
 
         ik_result = self.compute_ik(
             current_state, x, y, z,
-            qx=float(q_final[0]),
-            qy=float(q_final[1]),
-            qz=float(q_final[2]),
-            qw=float(q_final[3])
+            qx=float(q_final_quat[0]),
+            qy=float(q_final_quat[1]),
+            qz=float(q_final_quat[2]),
+            qw=float(q_final_quat[3])
         )
 
         if ik_result:
