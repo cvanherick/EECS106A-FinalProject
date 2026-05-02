@@ -1,4 +1,5 @@
 import sys
+import np
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
@@ -70,9 +71,9 @@ class IKPlanner(Node):
             msg.pose.orientation.w
         ])
 
-        q_down = R.from_quat([0.0, 0.0, 0.0, 1.0])
 
-        q_final = (q_down * q_yaw).as_quat()
+        q_wrist = R.from_euler('z', np.pi/2)
+        q_final = (q_wrist * q_yaw).as_quat()   
 
         current_state = JointState()
         current_state.name = [
