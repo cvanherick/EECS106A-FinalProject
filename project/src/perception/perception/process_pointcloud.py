@@ -120,7 +120,6 @@ class RealSensePCSubscriber(Node):
 
         principal = eigvecs[:, np.argmax(eigvals)]
         yaw = np.arctan2(principal[1], principal[0])
-        yaw += np.pi / 2.0
         pose = PoseStamped()
         pose.header = cloud.header
 
