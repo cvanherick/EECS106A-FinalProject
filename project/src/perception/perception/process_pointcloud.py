@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import String
 import numpy as np
 import sensor_msgs_py.point_cloud2 as pc2
 from tf2_ros import Buffer, TransformListener, TransformException
@@ -22,6 +23,11 @@ class RealSensePCSubscriber(Node):
         self.min_z = float(self.declare_parameter('min_z', -0.18).value)
         self.max_z = float(self.declare_parameter('max_z', -0.15).value)
 
+        # 🔧 clustering + sizing params
+        self.cluster_dist_thresh = 0.008   # meters
+        self.cluster_min_pts = 50
+        self.block_unit = 0.016  # meters per stud (MEASURE THIS!)
+
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
@@ -36,14 +42,55 @@ class RealSensePCSubscriber(Node):
             PointCloud2, '/filtered_points', 1
         )
 
-        self.pub_red = None
-        self.pub_blue = None
-        self.pub_green = None
+        self.pose_pub = self.create_publisher(
+            PoseStamped, '/cube_pose_red', 10
+        )
+
+        self.block_info_pub = self.create_publisher(
+            String, '/detected_blocks', 10
+        )
 
         self.add_on_set_parameters_callback(self._on_parameter_update)
 
-        self.get_logger().info("Multi-color point cloud tracker initialized.")
+        self.get_logger().info("Red block clustering + sizing initialized.")
 
+    # ----------------------------
+    # Euclidean clustering (no ML)
+    # ----------------------------
+    def euclidean_clustering(self, points):
+        clusters = []
+        visited = np.zeros(len(points), dtype=bool)
+
+        for i in range(len(points)):
+            if visited[i]:
+                continue
+
+            queue = [i]
+            cluster_idx = []
+
+            while queue:
+                idx = queue.pop()
+                if visited[idx]:
+                    continue
+
+                visited[idx] = True
+                cluster_idx.append(idx)
+
+                dists = np.linalg.norm(points - points[idx], axis=1)
+                neighbors = np.where(dists < self.cluster_dist_thresh)[0]
+
+                for n in neighbors:
+                    if not visited[n]:
+                        queue.append(n)
+
+            if len(cluster_idx) > self.cluster_min_pts:
+                clusters.append(points[cluster_idx])
+
+        return clusters
+
+    # ----------------------------
+    # Main callback
+    # ----------------------------
     def pointcloud_callback(self, msg: PointCloud2):
         try:
             tf = self.tf_buffer.lookup_transform(
@@ -78,40 +125,45 @@ class RealSensePCSubscriber(Node):
             (xyz[:, 2] >= self.min_z)
         )
 
-        masks = {
-            "red": (r > 150) & (g < 100) & (b < 100),
-            "blue": (b > 150) & (r < 100) & (g < 100),
-            "green": (g > 150) & (r < 100) & (b < 100)
-        }
+        # 🔴 Only RED now
+        red_mask = (r > 150) & (g < 100) & (b < 100)
 
-        for color, color_mask in masks.items():
-            self.process_object(color, cloud, xyz, spatial_mask & color_mask)
+        pts = xyz[spatial_mask & red_mask]
 
-    def process_object(self, color, cloud, xyz, mask):
-        pts = xyz[mask]
-
-        if len(pts) < 50:
+        if len(pts) < self.cluster_min_pts:
             return
 
+        # ----------------------------
+        # CLUSTERING STEP
+        # ----------------------------
+        clusters = self.euclidean_clustering(pts)
+
+        self.get_logger().info(f"Detected {len(clusters)} clusters")
+
+        for cluster in clusters:
+            self.process_block(cluster, cloud.header)
+
+    # ----------------------------
+    # Process individual block
+    # ----------------------------
+    def process_block(self, pts, header):
+
+        # Remove outliers (z-score)
         mean = np.mean(pts, axis=0)
         std = np.std(pts, axis=0)
         std[std == 0] = 1e-6
 
         z = np.abs((pts - mean) / std)
-        clean_mask = (z[:, 0] < 2.0) & (z[:, 1] < 2.0) & (z[:, 2] < 2.0)
-        clean = pts[clean_mask]
+        clean = pts[(z < 2.0).all(axis=1)]
 
-        if len(clean) < 50:
+        if len(clean) < self.cluster_min_pts:
             return
-
-        filtered_cloud = pc2.create_cloud_xyz32(
-            cloud.header,
-            clean.tolist()
-        )
-        self.filtered_points_pub.publish(filtered_cloud)
 
         centroid = np.mean(clean, axis=0)
 
+        # ----------------------------
+        # PCA for orientation
+        # ----------------------------
         xy = clean[:, :2]
         xy_centered = xy - centroid[:2]
 
@@ -120,33 +172,51 @@ class RealSensePCSubscriber(Node):
 
         principal = eigvecs[:, np.argmax(eigvals)]
         yaw = np.arctan2(principal[1], principal[0])
+
+        # ----------------------------
+        # Bounding box (PCA frame)
+        # ----------------------------
+        aligned = xy_centered @ eigvecs
+        min_xy = np.min(aligned, axis=0)
+        max_xy = np.max(aligned, axis=0)
+
+        lengths = max_xy - min_xy
+
+        long_side = max(lengths)
+        short_side = min(lengths)
+
+        # ----------------------------
+        # Convert to block units
+        # ----------------------------
+        n_long = int(round(long_side / self.block_unit))
+        n_short = int(round(short_side / self.block_unit))
+
+        shape = f"{n_long}x{n_short}"
+
+        self.get_logger().info(f"Block detected: {shape}")
+
+        # ----------------------------
+        # Publish pose (same as before)
+        # ----------------------------
         pose = PoseStamped()
-        pose.header = cloud.header
+        pose.header = header
 
         pose.pose.position.x = float(centroid[0])
         pose.pose.position.y = float(centroid[1])
         pose.pose.position.z = float(centroid[2])
 
         half = yaw / 2.0
-        pose.pose.orientation.x = 0.0
-        pose.pose.orientation.y = 0.0
         pose.pose.orientation.z = float(np.sin(half))
         pose.pose.orientation.w = float(np.cos(half))
 
-        if color == "red":
-            if self.pub_red is None:
-                self.pub_red = self.create_publisher(PoseStamped, '/cube_pose_red', 1)
-            self.pub_red.publish(pose)
+        self.pose_pub.publish(pose)
 
-        elif color == "blue":
-            if self.pub_blue is None:
-                self.pub_blue = self.create_publisher(PoseStamped, '/cube_pose_blue', 1)
-            self.pub_blue.publish(pose)
-
-        elif color == "green":
-            if self.pub_green is None:
-                self.pub_green = self.create_publisher(PoseStamped, '/cube_pose_green', 1)
-            self.pub_green.publish(pose)
+        # ----------------------------
+        # Publish block info
+        # ----------------------------
+        msg = String()
+        msg.data = f"{shape}|x:{centroid[0]:.3f},y:{centroid[1]:.3f}"
+        self.block_info_pub.publish(msg)
 
     def _on_parameter_update(self, params):
         for p in params:

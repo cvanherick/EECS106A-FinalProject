@@ -1,4 +1,5 @@
 import sys
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
@@ -15,10 +16,8 @@ class IKPlanner(Node):
     def __init__(self):
         super().__init__('ik_planner')
 
-        # Create a callback group that allows multiple threads to run at once
         self.cb_group = ReentrantCallbackGroup()
 
-        # ---- Clients (Assigned to the callback group) ----
         self.ik_client = self.create_client(
             GetPositionIK, '/compute_ik', callback_group=self.cb_group)
         self.plan_client = self.create_client(
@@ -28,11 +27,11 @@ class IKPlanner(Node):
                           (self.plan_client, 'plan_kinematic_path')]:
             while not srv.wait_for_service(timeout_sec=1.0):
                 self.get_logger().info(f'Waiting for /{name} service...')
-                
+
         self.target_pose = None
         self.is_planning = False
+        self.execution_lock = False
 
-        # Create subscribers for all three colors
         self.subs = []
         for color in ['red', 'blue', 'green']:
             self.subs.append(
@@ -44,43 +43,47 @@ class IKPlanner(Node):
                 )
             )
 
-        # Timer (Assigned to the callback group so it doesn't block the node)
         self.timer = self.create_timer(0.5, self.timer_callback, callback_group=self.cb_group)
 
     def pose_callback(self, msg: PoseStamped):
-        # Just store the newest pose so the timer can process it
-        if not self.is_planning:
-            self.target_pose = msg
+        if self.is_planning or self.execution_lock:
+            return
+        self.target_pose = msg
 
     def timer_callback(self):
-        # If there's no pose, or we are already busy computing IK, do nothing
-        if self.target_pose is None or self.is_planning:
+        if self.target_pose is None or self.is_planning or self.execution_lock:
             return
-            
+
         self.is_planning = True
+        self.execution_lock = True
+
         msg = self.target_pose
-        self.target_pose = None # Clear it out
-        
-        # 1. Extract Position and add a Z-OFFSET
+        self.target_pose = None
+
         x = msg.pose.position.x
         y = msg.pose.position.y
-        z = msg.pose.position.z + 0.15 # Hover 15cm above the object
+        z = msg.pose.position.z + 0.15
+
+        qz = msg.pose.orientation.z
+        qw = msg.pose.orientation.w
+        yaw_angle = 2.0 * np.arctan2(qz, qw)
         
-        # 2. Extract your Yaw Quaternion (from Script 1)
-        q_yaw = R.from_quat([
-            msg.pose.orientation.x, 
-            msg.pose.orientation.y, 
-            msg.pose.orientation.z, 
-            msg.pose.orientation.w
-        ])
+        perpendicular_yaw = yaw_angle + (np.pi / 2.0)
+
+        self.get_logger().info(f"Received qz={qz:.4f}, qw={qw:.4f}")
+        self.get_logger().info(f"Extracted yaw_angle: {np.degrees(yaw_angle):.2f}°")
+        self.get_logger().info(f"Perpendicular target yaw: {np.degrees(perpendicular_yaw):.2f}°")
+
+        # Create rotation: pitch down 90° around Y, then yaw around Z
+        # Use Euler angles directly to avoid rotation composition issues
+        q_final = R.from_euler('yz', [np.pi / 2, yaw_angle])
+
+        q_final_quat = q_final.as_quat()
+        self.get_logger().info(f"q_final: {q_final_quat}")
         
-        # 3. Create the "Point Down" Quaternion
-        q_down = R.from_quat([0.0, 1.0, 0.0, 0.0]) # qx, qy, qz, qw
-        
-        # 4. Multiply them to combine the rotations
-        q_final = (q_yaw * q_down).as_quat() # Returns [x, y, z, w]
-        
-        # 5. Grab current joint states (Mocked here for testing)
+        euler_final = R.from_quat(q_final_quat).as_euler('xyz', degrees=True)
+        self.get_logger().info(f"Final Euler angles (XYZ): {euler_final}")
+
         current_state = JointState()
         current_state.name = [
             'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
@@ -88,18 +91,17 @@ class IKPlanner(Node):
         ]
         current_state.position = [4.722, -1.850, -1.425, -1.405, 1.593, -3.141]
 
-        self.get_logger().info(f"Computing IK for x:{x:.2f}, y:{y:.2f}, z:{z:.2f}")
-        
-        # 6. Run IK!
         ik_result = self.compute_ik(
             current_state, x, y, z,
-            qx=float(q_final[0]), qy=float(q_final[1]), qz=float(q_final[2]), qw=float(q_final[3])
+            qx=float(q_final_quat[0]),
+            qy=float(q_final_quat[1]),
+            qz=float(q_final_quat[2]),
+            qw=float(q_final_quat[3])
         )
-        
+
         if ik_result:
-            self.get_logger().info("IK successful! Ready to plan.")
             self.plan_to_joints(ik_result)
-            
+
         self.is_planning = False
 
     def compute_ik(self, current_joint_state, x, y, z, qx=0.0, qy=1.0, qz=0.0, qw=0.0):
@@ -111,7 +113,7 @@ class IKPlanner(Node):
         pose.pose.orientation.x = qx
         pose.pose.orientation.y = qy
         pose.pose.orientation.z = qz
-        pose.pose.orientation.w = qw 
+        pose.pose.orientation.w = qw
 
         ik_req = GetPositionIK.Request()
         ik_req.ik_request.pose_stamped = pose
@@ -120,20 +122,19 @@ class IKPlanner(Node):
         ik_req.ik_request.avoid_collisions = True
         ik_req.ik_request.timeout = Duration(sec=5)
         ik_req.ik_request.group_name = 'ur_manipulator'
-        
+
         future = self.ik_client.call_async(ik_req)
         rclpy.spin_until_future_complete(self, future)
 
         if future.result() is None:
-            self.get_logger().error('IK service failed.')
+            self.execution_lock = False
             return None
 
         result = future.result()
         if result.error_code.val != result.error_code.SUCCESS:
-            self.get_logger().error(f'IK failed, code: {result.error_code.val}')
+            self.execution_lock = False
             return None
 
-        self.get_logger().info('IK solution found.')
         return result.solution.joint_state
 
     def plan_to_joints(self, target_joint_state):
@@ -159,27 +160,24 @@ class IKPlanner(Node):
         rclpy.spin_until_future_complete(self, future)
 
         if future.result() is None:
-            self.get_logger().error('Planning service failed.')
+            self.execution_lock = False
             return None
 
         result = future.result()
         if result.motion_plan_response.error_code.val != 1:
-            self.get_logger().error('Planning failed.')
+            self.execution_lock = False
             return None
 
-        self.get_logger().info('Motion plan computed successfully.')
+        self.execution_lock = False
         return result.motion_plan_response.trajectory
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = IKPlanner()
-    node.get_logger().info("IK Planner is running and waiting for cube poses...")
-    
-    # Use a MultiThreadedExecutor to allow the timer and the services to run simultaneously
     executor = MultiThreadedExecutor()
     executor.add_node(node)
-    
+
     try:
         executor.spin()
     except KeyboardInterrupt:

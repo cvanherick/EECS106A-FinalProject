@@ -1,0 +1,5 @@
+  File "/home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/planning/lib/python3.10/site-packages/planning/ik.py", line 89
+    >>>>>>> 63b2036c428af0b8debc69a80fc41e6ff9717e67
+             ^
+SyntaxError: invalid decimal literal
+

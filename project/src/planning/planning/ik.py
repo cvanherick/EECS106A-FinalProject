@@ -74,19 +74,9 @@ class IKPlanner(Node):
         self.get_logger().info(f"Extracted yaw_angle: {np.degrees(yaw_angle):.2f}°")
         self.get_logger().info(f"Perpendicular target yaw: {np.degrees(perpendicular_yaw):.2f}°")
 
-<<<<<<< HEAD
-        q_pitch_down = R.from_euler('y', np.pi)
-        q_yaw = R.from_euler('z', perpendicular_yaw)
-        
-        self.get_logger().info(f"q_pitch_down: {q_pitch_down.as_quat()}")
-        self.get_logger().info(f"q_yaw: {q_yaw.as_quat()}")
-        
-        q_final = q_yaw * q_pitch_down
-=======
         # Create rotation: pitch down 90° around Y, then yaw around Z
         # Use Euler angles directly to avoid rotation composition issues
         q_final = R.from_euler('yz', [np.pi / 2, yaw_angle])
->>>>>>> 63b2036c428af0b8debc69a80fc41e6ff9717e67
 
         q_final_quat = q_final.as_quat()
         self.get_logger().info(f"q_final: {q_final_quat}")
