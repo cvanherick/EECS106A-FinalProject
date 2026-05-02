@@ -1,4 +1,3 @@
-# ROS Libraries
 from std_srvs.srv import Trigger
 import sys
 import rclpy
@@ -10,7 +9,6 @@ from moveit_msgs.msg import RobotTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import JointState
 from tf2_ros import Buffer, TransformListener
-from geometry_msgs.msg import PoseStamped
 from scipy.spatial.transform import Rotation as R
 import numpy as np
 
@@ -36,7 +34,7 @@ class UR7e_CubeGrasp(Node):
 
         self.ik_planner = IKPlanner()
 
-        self.job_queue = [] # Entries should be of type either JointState or String('toggle_grip')
+        self.job_queue = []
 
     def joint_state_callback(self, msg: JointState):
         self.joint_state = msg
@@ -53,27 +51,12 @@ class UR7e_CubeGrasp(Node):
         self.cube_pose = cube_pose
         q = cube_pose.pose.orientation
 
-        # Convert perception quaternion → scipy Rotation
-        q_yaw = R.from_quat([q.x, q.y, q.z, q.w])
+        yaw_angle = 2.0 * np.arctan2(q.z, q.w)
+        perpendicular_yaw = yaw_angle + (np.pi / 2.0)
+        
+        q_final_rot = R.from_euler('ZYX', [perpendicular_yaw, np.pi, 0.0])
+        q_final = q_final_rot.as_quat()
 
-        # 90° rotation to point gripper down (same as your IKPlanner)
-        q_down = R.from_quat([0.0, 1.0, 0.0, 0.0])
-
-        # Combine them
-        q_final = (q_down * q_yaw).as_quat()  # Fixed: down first (align yaw to cube), then yaw around world Z
-        # -----------------------------------------------------------
-        # TODO: In the following section you will add joint angles to the job queue. 
-        # Entries of the job queue should be of type either JointState or String('toggle_grip')
-        # Think about you will leverage the IK planner to get joint configurations for the cube grasping task.
-        # To understand how the queue works, refer to the execute_jobs() function below.
-        # -----------------------------------------------------------
-
-        # 1) Move to Pre-Grasp Position (gripper above the cube)
-        '''
-        Use the following offsets for pre-grasp position:
-        z offset: +0.185 (to be above the cube by accounting for gripper length)
-        pre-grasp above cube (offsets: x:0, y:0, z:+0.185
-        '''        
         pre_grasp_joints = self.ik_planner.compute_ik(
             self.joint_state,
             cube_pose.pose.position.x,
@@ -84,23 +67,12 @@ class UR7e_CubeGrasp(Node):
             qz=float(q_final[2]),
             qw=float(q_final[3])
         )
+        
         if pre_grasp_joints:
-            if self.rotation_applied == False:
-                self.rotation_applied = True
-                idx = pre_grasp_joints.name.index('wrist_3_joint')
-                pre_grasp_joints.position[idx] += np.pi / 2.0
-
             self.job_queue.append(pre_grasp_joints)
 
         print(cube_pose.pose.position.x, cube_pose.pose.position.y, cube_pose.pose.position.z)
 
-            
-
-        # 2) Move to Grasp Position (lower the gripper to the cube)
-        '''
-        Note that this will again be defined relative to the cube pose. 
-        DO NOT CHANGE z offset lower than +0.14. 
-        '''
         grasp_joints = self.ik_planner.compute_ik(
             self.joint_state,
             cube_pose.pose.position.x,
@@ -111,29 +83,15 @@ class UR7e_CubeGrasp(Node):
             qz=float(q_final[2]),
             qw=float(q_final[3])
         )
+        
         if grasp_joints:
             self.job_queue.append(grasp_joints)
 
-
-            
-        # 3) Close the gripper. See job_queue entries defined in init above for how to add this action.
         self.job_queue.append('toggle_grip')
 
-
-
-        
-        # 4) Move back to Pre-Grasp Position
         if pre_grasp_joints:
             self.job_queue.append(pre_grasp_joints)
 
-
-
-    
-        # 5) Move to releasecube_pose.pose.position.x Position
-        '''
-        We want the release position to be 0.3m to the left of the initial cube pose.
-        Which offset will you change to achieve this and in what direction?
-        '''
         release_joints = self.ik_planner.compute_ik(
                 self.joint_state,
                 cube_pose.pose.position.x,
@@ -148,14 +106,9 @@ class UR7e_CubeGrasp(Node):
         if release_joints:
             self.job_queue.append(release_joints)
 
-
-
-        # 6) Release the gripper
         self.job_queue.append('toggle_grip')
 
-
         self.execute_jobs()
-
 
     def execute_jobs(self):
         if not self.job_queue:
@@ -181,7 +134,7 @@ class UR7e_CubeGrasp(Node):
             self._toggle_gripper()
         else:
             self.get_logger().error("Unknown job type.")
-            self.execute_jobs()  # Proceed to next job
+            self.execute_jobs()
 
     def _toggle_gripper(self):
         if not self.gripper_cli.wait_for_service(timeout_sec=5.0):
@@ -191,13 +144,11 @@ class UR7e_CubeGrasp(Node):
 
         req = Trigger.Request()
         future = self.gripper_cli.call_async(req)
-        # wait for 2 seconds
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
 
         self.get_logger().info('Gripper toggled.')
-        self.execute_jobs()  # Proceed to next job
+        self.execute_jobs()
 
-            
     def _execute_joint_trajectory(self, joint_traj):
         self.get_logger().info('Waiting for controller action server...')
         self.exec_ac.wait_for_server()
@@ -225,7 +176,7 @@ class UR7e_CubeGrasp(Node):
         try:
             result = future.result().result
             self.get_logger().info('Execution complete.')
-            self.execute_jobs()  # Proceed to next job
+            self.execute_jobs()
         except Exception as e:
             self.get_logger().error(f'Execution failed: {e}')
 
