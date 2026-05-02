@@ -8,7 +8,11 @@ setup.py
 ../../build/planning/planning.egg-info/requires.txt
 ../../build/planning/planning.egg-info/top_level.txt
 ../../build/planning/planning.egg-info/zip-safe
+launch/lab5_bringup.launch.py
 planning/__init__.py
+planning/ik.py
+planning/main.py
+planning/static_tf_transform.py
 resource/planning
 test/test_copyright.py
 test/test_flake8.py

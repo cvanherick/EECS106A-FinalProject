@@ -4,7 +4,7 @@
   <name>planning</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
-  <maintainer email="cvanherick@berkeley.edu">ee106a-abh</maintainer>
+  <maintainer email="danielmunicio360@gmail.com">ee106a-tah</maintainer>
   <license>TODO: License declaration</license>
 
   <test_depend>ament_copyright</test_depend>
