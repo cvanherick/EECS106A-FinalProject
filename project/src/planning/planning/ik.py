@@ -64,20 +64,13 @@ class IKPlanner(Node):
         y = msg.pose.position.y
         z = msg.pose.position.z + 0.15
 
-        # Extract the principal axis yaw from the incoming pose
-        q_principal = R.from_quat([
-            msg.pose.orientation.x,
-            msg.pose.orientation.y,
-            msg.pose.orientation.z,
-            msg.pose.orientation.w
-        ])
-
-        # Convert to Euler angles to extract just the Z yaw
-        euler = q_principal.as_euler('xyz')
-        yaw_angle = euler[2]  # Z rotation (yaw)
+        # The perception node publishes Z-only rotation (yaw about principal axis)
+        # Extract yaw from the half-angle quaternion: qz = sin(yaw/2), qw = cos(yaw/2)
+        qz = msg.pose.orientation.z
+        qw = msg.pose.orientation.w
+        yaw_angle = 2.0 * np.arctan2(qz, qw)  # Convert half-angle back to full angle
 
         # Create rotation: pitch down 90° around Y, then yaw around Z
-        # Apply in order: first pitch down, then yaw to align with principal axis
         q_pitch_down = R.from_euler('y', np.pi / 2)  # Pitch down 90°
         q_yaw = R.from_euler('z', yaw_angle)  # Yaw to align with principal axis
         
