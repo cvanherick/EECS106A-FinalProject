@@ -75,7 +75,7 @@ class IKPlanner(Node):
         ])
         
         # 3. Create the "Point Down" Quaternion
-        q_down = R.from_quat([0.0, 1.0, 0.0, 0.0]) # qx, qy, qz, qw
+        q_down = R.from_quat([0.0, 0.0, 0.0, 0.0]) # qx, qy, qz, qw
         
         # 4. Multiply them to combine the rotations
         q_final = (q_down * q_yaw).as_quat()  # Fixed: down first (align yaw to cube), then yaw around world Z
