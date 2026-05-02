@@ -74,8 +74,8 @@ class IKPlanner(Node):
         q_pitch_down = R.from_euler('y', np.pi / 2)  # Pitch down 90°
         q_yaw = R.from_euler('z', yaw_angle)  # Yaw to align with principal axis
         
-        # Combine: pitch down first, then apply yaw
-        q_final = q_yaw * q_pitch_down
+        # Combine: pitch down first in gripper frame, then yaw in world frame
+        q_final = q_pitch_down * q_yaw
 
         q_final_quat = q_final.as_quat()
 
