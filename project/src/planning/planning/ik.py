@@ -64,29 +64,27 @@ class IKPlanner(Node):
         y = msg.pose.position.y
         z = msg.pose.position.z + 0.15
 
-        # The perception node publishes Z-only rotation (yaw about principal axis)
-        # Extract yaw from the half-angle quaternion: qz = sin(yaw/2), qw = cos(yaw/2)
         qz = msg.pose.orientation.z
         qw = msg.pose.orientation.w
-        yaw_angle = 2.0 * np.arctan2(qz, qw)  # Convert half-angle back to full angle
+        yaw_angle = 2.0 * np.arctan2(qz, qw)
+        
+        perpendicular_yaw = yaw_angle + (np.pi / 2.0)
 
         self.get_logger().info(f"Received qz={qz:.4f}, qw={qw:.4f}")
         self.get_logger().info(f"Extracted yaw_angle: {np.degrees(yaw_angle):.2f}°")
+        self.get_logger().info(f"Perpendicular target yaw: {np.degrees(perpendicular_yaw):.2f}°")
 
-        # Create rotation: pitch down 90° around Y, then yaw around Z
-        q_pitch_down = R.from_euler('y', np.pi / 2)  # Pitch down 90°
-        q_yaw = R.from_euler('z', yaw_angle)  # Yaw to align with principal axis
+        q_pitch_down = R.from_euler('y', np.pi)
+        q_yaw = R.from_euler('z', perpendicular_yaw)
         
         self.get_logger().info(f"q_pitch_down: {q_pitch_down.as_quat()}")
         self.get_logger().info(f"q_yaw: {q_yaw.as_quat()}")
         
-        # Combine: pitch down first in gripper frame, then yaw in world frame
-        q_final = q_pitch_down * q_yaw
+        q_final = q_yaw * q_pitch_down
 
         q_final_quat = q_final.as_quat()
         self.get_logger().info(f"q_final: {q_final_quat}")
         
-        # Convert to Euler to see what angles we actually have
         euler_final = R.from_quat(q_final_quat).as_euler('xyz', degrees=True)
         self.get_logger().info(f"Final Euler angles (XYZ): {euler_final}")
 
