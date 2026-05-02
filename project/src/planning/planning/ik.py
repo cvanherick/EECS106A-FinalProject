@@ -74,14 +74,8 @@ class IKPlanner(Node):
         self.get_logger().info(f"Extracted yaw_angle: {np.degrees(yaw_angle):.2f}°")
 
         # Create rotation: pitch down 90° around Y, then yaw around Z
-        q_pitch_down = R.from_euler('y', np.pi / 2)  # Pitch down 90°
-        q_yaw = R.from_euler('z', yaw_angle)  # Yaw to align with principal axis
-        
-        self.get_logger().info(f"q_pitch_down: {q_pitch_down.as_quat()}")
-        self.get_logger().info(f"q_yaw: {q_yaw.as_quat()}")
-        
-        # Combine: pitch down first in gripper frame, then yaw in world frame
-        q_final = q_pitch_down * q_yaw
+        # Use Euler angles directly to avoid rotation composition issues
+        q_final = R.from_euler('yz', [np.pi / 2, yaw_angle])
 
         q_final_quat = q_final.as_quat()
         self.get_logger().info(f"q_final: {q_final_quat}")
