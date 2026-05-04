@@ -8,7 +8,7 @@ setup.py
 ../../build/planning/planning.egg-info/requires.txt
 ../../build/planning/planning.egg-info/top_level.txt
 ../../build/planning/planning.egg-info/zip-safe
-launch/lab5_bringup.launch.py
+launch/project_bringup.launch.py
 planning/__init__.py
 planning/ik.py
 planning/main.py

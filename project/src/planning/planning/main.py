@@ -32,9 +32,21 @@ class UR7e_CubeGrasp(Node):
         self.current_plan = None
         self.joint_state = None
 
+        self.board_pose_sub = self.create_subscription(
+            PoseStamped,
+            '/board_test_pose',
+            self.board_pose_callback,
+            1
+        )
+
+        self.board_pose = None
+
         self.ik_planner = IKPlanner()
 
         self.job_queue = []
+
+    def board_pose_callback(self, msg):
+        self.board_pose = msg
 
     def joint_state_callback(self, msg: JointState):
         self.joint_state = msg
@@ -92,21 +104,40 @@ class UR7e_CubeGrasp(Node):
         if pre_grasp_joints:
             self.job_queue.append(pre_grasp_joints)
 
-        release_joints = self.ik_planner.compute_ik(
-                self.joint_state,
-                cube_pose.pose.position.x,
-                cube_pose.pose.position.y + 0.1,
-                cube_pose.pose.position.z + 0.185,
-                qx=float(q_final[0]),
-                qy=float(q_final[1]),
-                qz=float(q_final[2]),
-                qw=float(q_final[3])
-            )
-        
-        if release_joints:
-            self.job_queue.append(release_joints)
+        if self.board_pose is None:
+            self.get_logger().info("No board test pose yet, cannot place")
+            return
 
-        self.job_queue.append('toggle_grip')
+        if self.board_pose is None:
+            self.get_logger().error("No board pose yet, cannot move to board")
+            return
+
+        board_x = self.board_pose.pose.position.x
+        board_y = self.board_pose.pose.position.y
+        board_z = self.board_pose.pose.position.z + 0.35
+
+        self.get_logger().info(
+            f"Board hover target: x={board_x:.3f}, y={board_y:.3f}, z={board_z:.3f}"
+        )
+
+        release_joints = self.ik_planner.compute_ik(
+            self.joint_state,
+            board_x,
+            board_y,
+            board_z,
+            qx=float(q_final[0]),
+            qy=float(q_final[1]),
+            qz=float(q_final[2]),
+            qw=float(q_final[3])
+        )
+
+        if release_joints:
+            self.get_logger().info("Board hover IK succeeded, adding release move")
+            self.job_queue.append(release_joints)
+        else:
+            self.get_logger().error("Board hover IK failed")  
+
+        #self.job_queue.append('toggle_grip')
 
         self.execute_jobs()
 

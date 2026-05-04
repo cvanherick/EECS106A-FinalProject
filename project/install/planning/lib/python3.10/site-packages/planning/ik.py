@@ -5,7 +5,7 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from moveit_msgs.srv import GetPositionIK, GetMotionPlan
-from moveit_msgs.msg import PositionIKRequest, Constraints, JointConstraint
+from moveit_msgs.msg import Constraints, JointConstraint
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import JointState
 from builtin_interfaces.msg import Duration
@@ -19,9 +19,11 @@ class IKPlanner(Node):
         self.cb_group = ReentrantCallbackGroup()
 
         self.ik_client = self.create_client(
-            GetPositionIK, '/compute_ik', callback_group=self.cb_group)
+            GetPositionIK, '/compute_ik', callback_group=self.cb_group
+        )
         self.plan_client = self.create_client(
-            GetMotionPlan, '/plan_kinematic_path', callback_group=self.cb_group)
+            GetMotionPlan, '/plan_kinematic_path', callback_group=self.cb_group
+        )
 
         for srv, name in [(self.ik_client, 'compute_ik'),
                           (self.plan_client, 'plan_kinematic_path')]:
@@ -32,22 +34,26 @@ class IKPlanner(Node):
         self.is_planning = False
         self.execution_lock = False
 
-        self.subs = []
-        for color in ['red', 'blue', 'green']:
-            self.subs.append(
-                self.create_subscription(
-                    PoseStamped,
-                    f'/cube_pose_{color}',
-                    self.pose_callback,
-                    10
-                )
-            )
+        # TEST MODE: only listen to board target
+        #self.create_subscription(
+        #   PoseStamped,
+        #  '/board_test_pose',
+        # self.pose_callback,
+        #10
+        #)
 
-        self.timer = self.create_timer(0.5, self.timer_callback, callback_group=self.cb_group)
+        #self.timer = self.create_timer(
+        #    0.5,
+        #    self.timer_callback,
+        #    callback_group=self.cb_group
+        #)
+
+        #self.get_logger().info("IK test mode: listening to /board_test_pose")
 
     def pose_callback(self, msg: PoseStamped):
         if self.is_planning or self.execution_lock:
             return
+
         self.target_pose = msg
 
     def timer_callback(self):
@@ -62,27 +68,17 @@ class IKPlanner(Node):
 
         x = msg.pose.position.x
         y = msg.pose.position.y
+
+        # IMPORTANT: go above board, not into board
         z = msg.pose.position.z + 0.15
 
-        qz = msg.pose.orientation.z
-        qw = msg.pose.orientation.w
-        yaw_angle = 2.0 * np.arctan2(qz, qw)
-        
-        perpendicular_yaw = yaw_angle + (np.pi / 2.0)
+        self.get_logger().info(
+            f"Moving above board target: x={x:.3f}, y={y:.3f}, z={z:.3f}"
+        )
 
-        self.get_logger().info(f"Received qz={qz:.4f}, qw={qw:.4f}")
-        self.get_logger().info(f"Extracted yaw_angle: {np.degrees(yaw_angle):.2f}°")
-        self.get_logger().info(f"Perpendicular target yaw: {np.degrees(perpendicular_yaw):.2f}°")
-
-        # Create rotation: pitch down 90° around Y, then yaw around Z
-        # Use Euler angles directly to avoid rotation composition issues
-        q_final = R.from_euler('yz', [np.pi / 2, yaw_angle])
-
+        # Tool pointing down
+        q_board = R.from_euler('y', np.pi / 2).as_quat()
         q_final_quat = q_final.as_quat()
-        self.get_logger().info(f"q_final: {q_final_quat}")
-        
-        euler_final = R.from_quat(q_final_quat).as_euler('xyz', degrees=True)
-        self.get_logger().info(f"Final Euler angles (XYZ): {euler_final}")
 
         current_state = JointState()
         current_state.name = [
@@ -92,7 +88,8 @@ class IKPlanner(Node):
         current_state.position = [4.722, -1.850, -1.425, -1.405, 1.593, -3.141]
 
         ik_result = self.compute_ik(
-            current_state, x, y, z,
+            current_state,
+            x, y, z,
             qx=float(q_final_quat[0]),
             qy=float(q_final_quat[1]),
             qz=float(q_final_quat[2]),
@@ -127,14 +124,17 @@ class IKPlanner(Node):
         rclpy.spin_until_future_complete(self, future)
 
         if future.result() is None:
+            self.get_logger().warn("IK failed: no result")
             self.execution_lock = False
             return None
 
         result = future.result()
         if result.error_code.val != result.error_code.SUCCESS:
+            self.get_logger().warn(f"IK failed with code {result.error_code.val}")
             self.execution_lock = False
             return None
 
+        self.get_logger().info("IK solution found")
         return result.solution.joint_state
 
     def plan_to_joints(self, target_joint_state):
@@ -144,6 +144,7 @@ class IKPlanner(Node):
         req.motion_plan_request.planner_id = "RRTConnectkConfigDefault"
 
         goal_constraints = Constraints()
+
         for name, pos in zip(target_joint_state.name, target_joint_state.position):
             goal_constraints.joint_constraints.append(
                 JointConstraint(
@@ -156,18 +157,25 @@ class IKPlanner(Node):
             )
 
         req.motion_plan_request.goal_constraints.append(goal_constraints)
+
         future = self.plan_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
 
         if future.result() is None:
+            self.get_logger().warn("Planning failed: no result")
             self.execution_lock = False
             return None
 
         result = future.result()
+
         if result.motion_plan_response.error_code.val != 1:
+            self.get_logger().warn(
+                f"Planning failed with code {result.motion_plan_response.error_code.val}"
+            )
             self.execution_lock = False
             return None
 
+        self.get_logger().info("Motion plan found")
         self.execution_lock = False
         return result.motion_plan_response.trajectory
 

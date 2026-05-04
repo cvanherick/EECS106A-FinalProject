@@ -1,0 +1,25 @@
+[0.994s] Invoking command in '/home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/src/perception': PYTHONPATH=/home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/perception build --build-base /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/build install --record /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/install.log --single-version-externally-managed install_data
+[1.189s] running egg_info
+[1.190s] writing ../../build/perception/perception.egg-info/PKG-INFO
+[1.192s] writing dependency_links to ../../build/perception/perception.egg-info/dependency_links.txt
+[1.194s] writing entry points to ../../build/perception/perception.egg-info/entry_points.txt
+[1.196s] writing requirements to ../../build/perception/perception.egg-info/requires.txt
+[1.198s] writing top-level names to ../../build/perception/perception.egg-info/top_level.txt
+[1.202s] reading manifest file '../../build/perception/perception.egg-info/SOURCES.txt'
+[1.204s] writing manifest file '../../build/perception/perception.egg-info/SOURCES.txt'
+[1.205s] running build
+[1.206s] running build_py
+[1.208s] copying perception/process_pointcloud.py -> /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/build/lib/perception
+[1.209s] running install
+[1.210s] running install_lib
+[1.211s] copying /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/build/lib/perception/process_pointcloud.py -> /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/python3.10/site-packages/perception
+[1.215s] byte-compiling /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/python3.10/site-packages/perception/process_pointcloud.py to process_pointcloud.cpython-310.pyc
+[1.221s] running install_data
+[1.221s] running install_egg_info
+[1.222s] removing '/home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/python3.10/site-packages/perception-0.0.0-py3.10.egg-info' (and everything under it)
+[1.227s] Copying ../../build/perception/perception.egg-info to /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/python3.10/site-packages/perception-0.0.0-py3.10.egg-info
+[1.254s] running install_scripts
+[1.282s] Installing interactive_plane script to /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/perception
+[1.285s] Installing process_pointcloud script to /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/perception
+[1.287s] writing list of installed files to '/home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/install.log'
+[1.303s] Invoked command in '/home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/src/perception' returned '0': PYTHONPATH=/home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/perception build --build-base /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/build install --record /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/install.log --single-version-externally-managed install_data
