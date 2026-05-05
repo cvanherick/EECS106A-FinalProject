@@ -309,15 +309,18 @@ class RealSensePCSubscriber(Node):
         pose.pose.position.y = y
         pose.pose.position.z = z
 
+        board_yaw = np.arctan2(self.row_dir[1], self.row_dir[0])
+        half = board_yaw / 2.0
+
         pose.pose.orientation.x = 0.0
         pose.pose.orientation.y = 0.0
-        pose.pose.orientation.z = 0.0
-        pose.pose.orientation.w = 1.0
+        pose.pose.orientation.z = float(np.sin(half))
+        pose.pose.orientation.w = float(np.cos(half))
 
         self.board_test_pose_pub.publish(pose)
         self.get_logger().info(
             f"Published place divot ({row:.2f},{col:.2f}) -> "
-            f"x={x:.3f}, y={y:.3f}, z={z:.3f}",
+            f"x={x:.3f}, y={y:.3f}, z={z:.3f}, yaw={board_yaw:.3f}",
             throttle_duration_sec=2.0
         )
 

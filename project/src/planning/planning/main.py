@@ -125,6 +125,12 @@ class UR7e_CubeGrasp(Node):
         q_final_rot = R.from_euler('ZYX', [perpendicular_yaw, np.pi, 0.0])
         q_final = q_final_rot.as_quat()
 
+        board_q = self.board_pose.pose.orientation
+        board_yaw = 2.0 * np.arctan2(board_q.z, board_q.w)
+        board_place_yaw = board_yaw + (np.pi / 2.0)
+        q_place_rot = R.from_euler('ZYX', [board_place_yaw, np.pi, 0.0])
+        q_place = q_place_rot.as_quat()
+
         # --- PRE-GRASP ---
         pre_grasp_joints = self.ik_planner.compute_ik(
             self.joint_state,
@@ -168,7 +174,7 @@ class UR7e_CubeGrasp(Node):
 
         self.get_logger().info(
             f"Board divot target: x={board_x:.3f}, y={board_y:.3f}, "
-            f"z={place_z:.3f}"
+            f"z={place_z:.3f}, yaw={board_yaw:.3f}"
         )
 
         # ✅ VISUALIZE TARGET
@@ -179,10 +185,10 @@ class UR7e_CubeGrasp(Node):
             board_x,
             board_y,
             place_hover_z,
-            qx=float(q_final[0]),
-            qy=float(q_final[1]),
-            qz=float(q_final[2]),
-            qw=float(q_final[3])
+            qx=float(q_place[0]),
+            qy=float(q_place[1]),
+            qz=float(q_place[2]),
+            qw=float(q_place[3])
         )
 
         place_joints = self.ik_planner.compute_ik(
@@ -190,10 +196,10 @@ class UR7e_CubeGrasp(Node):
             board_x,
             board_y,
             place_z,
-            qx=float(q_final[0]),
-            qy=float(q_final[1]),
-            qz=float(q_final[2]),
-            qw=float(q_final[3])
+            qx=float(q_place[0]),
+            qy=float(q_place[1]),
+            qz=float(q_place[2]),
+            qw=float(q_place[3])
         )
 
         if place_hover_joints and place_joints:
