@@ -26,7 +26,7 @@ class RealSensePCSubscriber(Node):
         self.CELL_SIZE = 0.03
 
         self.row_dir = np.array([1.0, 0.0])
-        self.col_dir = np.array([0.0, 1.0])
+        self.col_dir = np.array([0.0, -1.0])
         
         self.row_dir = self.row_dir / np.linalg.norm(self.row_dir)
         self.col_dir = self.col_dir / np.linalg.norm(self.col_dir)

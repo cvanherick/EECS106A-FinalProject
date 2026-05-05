@@ -1,103 +1,94 @@
 import numpy as np
+import random
 
-class BlokusLogic:
+class BlokusEngine:
     def __init__(self, rows=10, cols=12):
-        """
-        Initialize the game board.
-        State Representation:
-        0 = Empty, 1 = Player 1 (Human), 2 = Player 2 (Robot)
-        """
         self.rows = rows
         self.cols = cols
-        self.board = np.zeros((self.rows, self.cols), dtype=int)
+        self.board = np.zeros((rows, cols), dtype=int)
+        self.dsu = {1: {}, 2: {}}
+
+    def get_transformations(self, piece_coords):
+        if not piece_coords: return []
+        coords = np.array(piece_coords)
+        coords -= coords.min(axis=0)
+        grid = np.zeros((coords[:,0].max()+1, coords[:,1].max()+1), dtype=int)
+        for r, c in coords: grid[r, c] = 1
         
-    def get_piece_transformations(self, piece):
-        """
-        Takes a piece (list of (r, c) coordinates) and returns all 
-        unique rotations (0, 90, 180, 270) and flips (horizontal/vertical).
-        """
-        # TODO: Implement matrix rotation and flipping logic here.
-        # You can use numpy's rot90 and fliplr/flipud if you represent 
-        # pieces as small 2D arrays instead of coordinate lists.
-        pass
+        variants = set()
+        curr = grid
+        for _ in range(2):
+            for _ in range(4):
+                curr = np.rot90(curr)
+                new_c = tuple(sorted([(r, c) for r in range(curr.shape[0]) for c in range(curr.shape[1]) if curr[r, c]]))
+                variants.add(new_c)
+            curr = np.fliplr(curr)
+        return [list(v) for v in variants]
 
-    def is_valid_move(self, player_id, piece_coords, origin_r, origin_c, is_first_turn=False):
-        """
-        The Umpire: Checks if a proposed move is entirely legal.
-        piece_coords: List of relative (r, c) tuples, e.g., [(0,0), (0,1), (1,0)]
-        origin_r, origin_c: Where on the board the piece's (0,0) coordinate is placed
-        """
-        corner_touch = False
-
-        for r_offset, c_offset in piece_coords:
-            r = origin_r + r_offset
-            c = origin_c + c_offset
-
-            # 1. Bounds Check
-            if r < 0 or r >= self.rows or c < 0 or c >= self.cols:
-                return False 
-
-            # 2. Collision Check (Square must be empty)
-            if self.board[r, c] != 0:
+    def is_legal(self, player_id, coords, origin_r, origin_c, first_move=False):
+        has_corner = False
+        actual_coords = []
+        for dr, dc in coords:
+            r, c = origin_r + dr, origin_c + dc
+            if not (0 <= r < self.rows and 0 <= c < self.cols) or self.board[r, c] != 0:
                 return False
+            for nr, nc in [(r-1,c),(r+1,c),(r,c-1),(r,c+1)]:
+                if 0 <= nr < self.rows and 0 <= nc < self.cols and self.board[nr, nc] == player_id:
+                    return False
+            for nr, nc in [(r-1,c-1),(r-1,c+1),(r+1,c-1),(r+1,c+1)]:
+                if 0 <= nr < self.rows and 0 <= nc < self.cols and self.board[nr, nc] == player_id:
+                    has_corner = True
+            actual_coords.append((r, c))
+        if first_move:
+            return any((r==0 and c==0) or (r==self.rows-1 and c==self.cols-1) for r, c in actual_coords)
+        return has_corner
 
-            # 3. Edge Check (Negative Constraint)
-            # Cannot share a flat edge with your own piece
-            orthogonals = [(r-1, c), (r+1, c), (r, c-1), (r, c+1)]
-            for adj_r, adj_c in orthogonals:
-                if 0 <= adj_r < self.rows and 0 <= adj_c < self.cols:
-                    if self.board[adj_r, adj_c] == player_id:
-                        return False # Illegal edge connection
-
-            # 4. Corner Check (Positive Constraint)
-            # Must touch at least one of your own corners
-            diagonals = [(r-1, c-1), (r-1, c+1), (r+1, c-1), (r+1, c+1)]
-            for diag_r, diag_c in diagonals:
-                if 0 <= diag_r < self.rows and 0 <= diag_c < self.cols:
-                    if self.board[diag_r, diag_c] == player_id:
-                        corner_touch = True
-
-        # First turn exception: You don't have to touch a corner of your own piece,
-        # but you usually have to touch a designated board corner.
-        if is_first_turn:
-            # TODO: Add logic to ensure the piece covers a specific board corner 
-            # e.g., (0,0) or (self.rows-1, self.cols-1)
-            return True
-
-        return corner_touch
-
-    def place_piece(self, player_id, piece_coords, origin_r, origin_c):
-        """
-        Applies the piece to the board. 
-        Note: Always call is_valid_move() before calling this!
-        """
-        for r_offset, c_offset in piece_coords:
-            r = origin_r + r_offset
-            c = origin_c + c_offset
+    def place(self, player_id, coords, origin_r, origin_c):
+        for dr, dc in coords:
+            r, c = origin_r + dr, origin_c + dc
             self.board[r, c] = player_id
+            self._update_dsu(player_id, r, c)
 
-    def get_all_legal_moves(self, player_id, player_inventory, is_first_turn=False):
-        """
-        The Engine for the AI: Scans the board to find every single legal 
-        move available for a given player based on their remaining pieces.
-        """
-        legal_moves = []
+    def _update_dsu(self, p_id, r, c):
+        self.dsu[p_id][(r, c)] = (r, c)
+        for nr, nc in [(r-1,c),(r+1,c),(r,c-1),(r,c+1)]:
+            if (nr, nc) in self.dsu[p_id]:
+                self._union(p_id, (r, c), (nr, nc))
+
+    def _find(self, p_id, i):
+        if self.dsu[p_id][i] == i: return i
+        self.dsu[p_id][i] = self._find(p_id, self.dsu[p_id][i])
+        return self.dsu[p_id][i]
+
+    def _union(self, p_id, i, j):
+        root_i, root_j = self._find(p_id, i), self._find(p_id, j)
+        if root_i != root_j: self.dsu[p_id][root_i] = root_j
+
+    def get_legal_moves(self, player_id, inventory, first_move=False):
+        moves = []
+        for name, shape in inventory.items():
+            for trans in self.get_transformations(shape):
+                for r in range(self.rows):
+                    for c in range(self.cols):
+                        if self.is_legal(player_id, trans, r, c, first_move):
+                            moves.append({'name': name, 'coords': trans, 'origin': (r, c)})
+        return moves
+
+    def get_greedy_move(self, player_id, inventory, first_move=False):
+        moves = self.get_legal_moves(player_id, inventory, first_move)
+        if not moves: return None
         
-        # This is a brute-force approach. For optimization later, you only 
-        # need to scan squares that are diagonal to the player's existing pieces.
-        for r in range(self.rows):
-            for c in range(self.cols):
-                for piece in player_inventory:
-                    transformations = self.get_piece_transformations(piece)
-                    for trans in transformations:
-                        if self.is_valid_move(player_id, trans, r, c, is_first_turn):
-                            legal_moves.append({
-                                'piece': trans,
-                                'origin': (r, c)
-                            })
-                            
-        return legal_moves
+        def score_move(move):
+            # Priority 1: Piece size (len of coords)
+            # Priority 2: Distance from their start (attacking the center)
+            size_score = len(move['coords']) * 10
+            r_orig, c_orig = move['origin']
+            # If player 2 (robot), try to get to (0,0). If player 1, get to (rows, cols)
+            dist_target = (0,0) if player_id == 2 else (self.rows-1, self.cols-1)
+            dist_score = 100 - (abs(r_orig - dist_target[0]) + abs(c_orig - dist_target[1]))
+            return size_score + dist_score
 
-    def print_board(self):
-        """Helper to visualize the board in the terminal."""
-        print(self.board)
+        return max(moves, key=score_move)
+
+def get_mega_inventory():
+    return {'1x2': [(0,0),(0,1)], '1x3': [(0,0),(0,1),(0,2)], '1x4': [(0,0),(0,1),(0,2),(0,3)]}
