@@ -11,18 +11,27 @@ from sensor_msgs.msg import JointState
 from tf2_ros import Buffer, TransformListener
 from scipy.spatial.transform import Rotation as R
 import numpy as np
+from visualization_msgs.msg import Marker  # ✅ NEW
 
 from planning.ik import IKPlanner
+
 
 class UR7e_CubeGrasp(Node):
     def __init__(self):
         super().__init__('cube_grasp')
+
         self.rotation_applied = False
-        self.cube_pub = self.create_subscription(PoseStamped, '/cube_pose_red', self.cube_callback, 1)
-        self.joint_state_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 1)
+
+        self.cube_pub = self.create_subscription(
+            PoseStamped, '/cube_pose_red', self.cube_callback, 1
+        )
+        self.joint_state_sub = self.create_subscription(
+            JointState, '/joint_states', self.joint_state_callback, 1
+        )
 
         self.exec_ac = ActionClient(
-            self, FollowJointTrajectory,
+            self,
+            FollowJointTrajectory,
             '/scaled_joint_trajectory_controller/follow_joint_trajectory'
         )
 
@@ -45,6 +54,39 @@ class UR7e_CubeGrasp(Node):
 
         self.job_queue = []
 
+        # ✅ NEW: marker publisher
+        self.target_marker_pub = self.create_publisher(
+            Marker,
+            '/place_target_marker',
+            10
+        )
+
+    def publish_place_marker(self, x, y, z):
+        marker = Marker()
+        marker.header.frame_id = 'base_link'
+        marker.header.stamp = self.get_clock().now().to_msg()
+
+        marker.ns = 'place_target'
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+
+        marker.pose.position.x = x
+        marker.pose.position.y = y
+        marker.pose.position.z = z
+        marker.pose.orientation.w = 1.0
+
+        marker.scale.x = 0.05
+        marker.scale.y = 0.05
+        marker.scale.z = 0.05
+
+        marker.color.r = 1.0
+        marker.color.g = 0.0
+        marker.color.b = 0.0
+        marker.color.a = 1.0
+
+        self.target_marker_pub.publish(marker)
+
     def board_pose_callback(self, msg):
         self.board_pose = msg
 
@@ -56,6 +98,7 @@ class UR7e_CubeGrasp(Node):
             return
 
         self.rotation_applied = False
+
         if self.joint_state is None:
             self.get_logger().info("No joint state yet, cannot proceed")
             return
@@ -65,10 +108,11 @@ class UR7e_CubeGrasp(Node):
 
         yaw_angle = 2.0 * np.arctan2(q.z, q.w)
         perpendicular_yaw = yaw_angle + (np.pi / 2.0)
-        
+
         q_final_rot = R.from_euler('ZYX', [perpendicular_yaw, np.pi, 0.0])
         q_final = q_final_rot.as_quat()
 
+        # --- PRE-GRASP ---
         pre_grasp_joints = self.ik_planner.compute_ik(
             self.joint_state,
             cube_pose.pose.position.x,
@@ -79,12 +123,11 @@ class UR7e_CubeGrasp(Node):
             qz=float(q_final[2]),
             qw=float(q_final[3])
         )
-        
+
         if pre_grasp_joints:
             self.job_queue.append(pre_grasp_joints)
 
-        print(cube_pose.pose.position.x, cube_pose.pose.position.y, cube_pose.pose.position.z)
-
+        # --- GRASP ---
         grasp_joints = self.ik_planner.compute_ik(
             self.joint_state,
             cube_pose.pose.position.x,
@@ -95,7 +138,7 @@ class UR7e_CubeGrasp(Node):
             qz=float(q_final[2]),
             qw=float(q_final[3])
         )
-        
+
         if grasp_joints:
             self.job_queue.append(grasp_joints)
 
@@ -104,10 +147,7 @@ class UR7e_CubeGrasp(Node):
         if pre_grasp_joints:
             self.job_queue.append(pre_grasp_joints)
 
-        if self.board_pose is None:
-            self.get_logger().info("No board test pose yet, cannot place")
-            return
-
+        # --- PLACE ---
         if self.board_pose is None:
             self.get_logger().error("No board pose yet, cannot move to board")
             return
@@ -119,6 +159,9 @@ class UR7e_CubeGrasp(Node):
         self.get_logger().info(
             f"Board hover target: x={board_x:.3f}, y={board_y:.3f}, z={board_z:.3f}"
         )
+
+        # ✅ VISUALIZE TARGET
+        self.publish_place_marker(board_x, board_y, board_z)
 
         release_joints = self.ik_planner.compute_ik(
             self.joint_state,
@@ -135,9 +178,7 @@ class UR7e_CubeGrasp(Node):
             self.get_logger().info("Board hover IK succeeded, adding release move")
             self.job_queue.append(release_joints)
         else:
-            self.get_logger().error("Board hover IK failed")  
-
-        #self.job_queue.append('toggle_grip')
+            self.get_logger().error("Board hover IK failed")
 
         self.execute_jobs()
 
@@ -151,18 +192,19 @@ class UR7e_CubeGrasp(Node):
         next_job = self.job_queue.pop(0)
 
         if isinstance(next_job, JointState):
-
             traj = self.ik_planner.plan_to_joints(next_job)
+
             if traj is None:
                 self.get_logger().error("Failed to plan to position")
                 return
 
             self.get_logger().info("Planned to position")
-
             self._execute_joint_trajectory(traj.joint_trajectory)
+
         elif next_job == 'toggle_grip':
             self.get_logger().info("Toggling gripper")
             self._toggle_gripper()
+
         else:
             self.get_logger().error("Unknown job type.")
             self.execute_jobs()
@@ -189,13 +231,13 @@ class UR7e_CubeGrasp(Node):
 
         self.get_logger().info('Sending trajectory to controller...')
         send_future = self.exec_ac.send_goal_async(goal)
-        print(send_future)
         send_future.add_done_callback(self._on_goal_sent)
 
     def _on_goal_sent(self, future):
         goal_handle = future.result()
+
         if not goal_handle.accepted:
-            self.get_logger().error('bonk')
+            self.get_logger().error('Trajectory rejected')
             rclpy.shutdown()
             return
 
@@ -217,6 +259,7 @@ def main(args=None):
     node = UR7e_CubeGrasp()
     rclpy.spin(node)
     node.destroy_node()
+
 
 if __name__ == '__main__':
     main()

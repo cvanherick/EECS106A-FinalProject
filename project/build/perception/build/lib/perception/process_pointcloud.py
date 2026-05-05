@@ -23,10 +23,14 @@ class RealSensePCSubscriber(Node):
 
         self.board_origin = None
         self.board_z = None
-        self.CELL_SIZE = 0.03
+        
+        # NOTE: If the robot is still overshooting slightly, measure the physical 
+        # distance between two peg centers and update this number!
+        self.CELL_SIZE = 0.03 
 
-        self.row_dir = np.array([1.0, 0.0])
-        self.col_dir = np.array([0.0, -1.0])
+        # Hardcoded axes. Note: Y is flipped to 1.0 to prevent moving the wrong way!
+        self.row_dir = np.array([-1.0, 0.0])
+        self.col_dir = np.array([0.0, 1.0])
         
         self.row_dir = self.row_dir / np.linalg.norm(self.row_dir)
         self.col_dir = self.col_dir / np.linalg.norm(self.col_dir)
@@ -44,7 +48,6 @@ class RealSensePCSubscriber(Node):
         self.pose_pub = self.create_publisher(PoseStamped, '/cube_pose_red', 10)
         self.block_info_pub = self.create_publisher(String, '/detected_blocks', 10)
 
-        # NEW: publishes board cell target for IK
         self.board_test_pose_pub = self.create_publisher(
             PoseStamped,
             '/board_test_pose',
@@ -53,7 +56,7 @@ class RealSensePCSubscriber(Node):
 
         self.add_on_set_parameters_callback(self._on_parameter_update)
 
-        self.get_logger().info("Red block clustering + board test pose initialized.")
+        self.get_logger().info("Red block marker clustering initialized.")
 
     def euclidean_clustering(self, points):
         clusters = []
@@ -111,7 +114,6 @@ class RealSensePCSubscriber(Node):
         self.board_origin = np.array([centroid[0], centroid[1]])
         self.board_z = centroid[2]
 
-
         self.get_logger().info("===== BOARD ORIGIN SET =====")
         self.get_logger().info(f"Origin P00: x={self.board_origin[0]:.4f}, y={self.board_origin[1]:.4f}")
         self.get_logger().info(f"Board z: {self.board_z:.4f}")
@@ -157,12 +159,6 @@ class RealSensePCSubscriber(Node):
 
         self.board_test_pose_pub.publish(pose)
 
-        self.get_logger().info(
-            f"Published /board_test_pose for cell ({row},{col}): "
-            f"x={x:.3f}, y={y:.3f}, z={z:.3f}",
-            throttle_duration_sec=2.0
-        )
-
     def pointcloud_callback(self, msg: PointCloud2):
         try:
             tf = self.tf_buffer.lookup_transform(
@@ -192,36 +188,32 @@ class RealSensePCSubscriber(Node):
         red_mask = (r > 150) & (g < 100) & (b < 100)
         pts = xyz[red_mask]
 
-        self.get_logger().info(
-            f"total={len(xyz)}, red={np.count_nonzero(red_mask)}",
-            throttle_duration_sec=2.0
-        )
-
         if len(pts) < self.cluster_min_pts:
             return
 
         clusters = self.euclidean_clustering(pts)
 
-        self.get_logger().info(f"Detected {len(clusters)} clusters", throttle_duration_sec=2.0)
-
-        for cluster in clusters:
-            shape = self.estimate_shape(cluster)
-
-            self.get_logger().info(f"Estimated shape before origin check: {shape}", throttle_duration_sec=2.0)
-
-            if shape == "1x1":
-                if self.board_origin is None:
+        # 1. PASS ONE: Look ONLY for the 1x1 marker to establish the board origin
+        if self.board_origin is None:
+            for cluster in clusters:
+                shape = self.estimate_shape(cluster)
+                if shape == "1x1":
                     self.get_logger().info("Found 1x1 marker, setting board origin")
                     self.set_board_origin(cluster)
-                else:
-                    self.get_logger().info("1x1 marker seen, origin already set", throttle_duration_sec=2.0)
-                continue
+                    break # Board origin found! Stop looping.
 
-            self.process_block(cluster, cloud.header)
-
+        # 2. PASS TWO: Process pickable blocks ONLY IF the board is safely calibrated
         if self.board_origin is not None:
-            test = self.board_to_world(5, 5)
-            self.get_logger().info(f"(5,5) maps to: {test}", throttle_duration_sec=2.0)
+            for cluster in clusters:
+                shape = self.estimate_shape(cluster)
+                
+                # Do not publish the origin marker as a pickable block
+                if shape == "1x1":
+                    continue 
+
+                self.process_block(cluster, cloud.header)
+
+            # Publish the test pose constantly so main.py always receives it
             self.publish_board_test_pose(5, 5)
 
     def process_block(self, pts, header):
@@ -267,7 +259,7 @@ class RealSensePCSubscriber(Node):
 
         pose.pose.position.x = float(centroid[0])
         pose.pose.position.y = float(centroid[1])
-        pose.pose.position.z = float(centroid[2])
+        pose.pose.position.z = float(centroid[2]) - 0.005
 
         half = yaw / 2.0
         pose.pose.orientation.z = float(np.sin(half))
