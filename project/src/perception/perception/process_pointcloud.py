@@ -60,17 +60,17 @@ class RealSensePCSubscriber(Node):
                 ).value
             )
         )
-        self.target_row = float(
-            self.declare_parameter(
-                'target_row',
-                5.0
-            ).value
+        default_place_row = float(
+            self.declare_parameter('target_row', 5.0).value
         )
-        self.target_col = float(
-            self.declare_parameter(
-                'target_col',
-                5.0
-            ).value
+        default_place_col = float(
+            self.declare_parameter('target_col', 5.0).value
+        )
+        self.place_row = float(
+            self.declare_parameter('place_row', default_place_row).value
+        )
+        self.place_col = float(
+            self.declare_parameter('place_col', default_place_col).value
         )
 
         # Hardcoded axes. Y is flipped to 1.0 to prevent moving the wrong way.
@@ -112,7 +112,7 @@ class RealSensePCSubscriber(Node):
         self.get_logger().info("Red block marker clustering initialized.")
         self.get_logger().info(
             f"Board defaults: {self.board_rows}x{self.board_cols}, "
-            f"target=({self.target_row:.1f},{self.target_col:.1f}), "
+            f"place=({self.place_row:.1f},{self.place_col:.1f}), "
             f"cell={self.CELL_SIZE:.5f} m"
         )
 
@@ -270,6 +270,15 @@ class RealSensePCSubscriber(Node):
         if self.board_origin is None:
             return None
 
+        if not self.is_valid_divot(row, col):
+            self.get_logger().warn(
+                f"Requested divot ({row:.2f},{col:.2f}) is outside "
+                f"0-{self.board_rows - 1} rows and "
+                f"0-{self.board_cols - 1} cols",
+                throttle_duration_sec=2.0
+            )
+            return None
+
         xy = (
             self.board_origin
             + row * self.row_step * self.row_dir
@@ -277,6 +286,12 @@ class RealSensePCSubscriber(Node):
         )
 
         return float(xy[0]), float(xy[1]), float(self.board_z)
+
+    def is_valid_divot(self, row, col):
+        return (
+            0.0 <= row <= float(self.board_rows - 1)
+            and 0.0 <= col <= float(self.board_cols - 1)
+        )
 
     def publish_board_test_pose(self, row=5, col=5):
         result = self.board_to_world(row, col)
@@ -300,6 +315,11 @@ class RealSensePCSubscriber(Node):
         pose.pose.orientation.w = 1.0
 
         self.board_test_pose_pub.publish(pose)
+        self.get_logger().info(
+            f"Published place divot ({row:.2f},{col:.2f}) -> "
+            f"x={x:.3f}, y={y:.3f}, z={z:.3f}",
+            throttle_duration_sec=2.0
+        )
 
     def pointcloud_callback(self, msg: PointCloud2):
         try:
@@ -364,7 +384,7 @@ class RealSensePCSubscriber(Node):
         if self.board_origin is not None:
             # Publish board pose before cube poses so planning has the target
             # before the first pick callback fires.
-            self.publish_board_test_pose(self.target_row, self.target_col)
+            self.publish_board_test_pose(self.place_row, self.place_col)
 
             for cluster in clusters:
                 shape = self.estimate_shape(cluster)
@@ -434,6 +454,20 @@ class RealSensePCSubscriber(Node):
         self.block_info_pub.publish(msg)
 
     def _on_parameter_update(self, params):
+        for param in params:
+            if param.name == 'place_row':
+                self.place_row = float(param.value)
+            elif param.name == 'place_col':
+                self.place_col = float(param.value)
+            elif param.name == 'target_row':
+                self.place_row = float(param.value)
+            elif param.name == 'target_col':
+                self.place_col = float(param.value)
+
+        self.get_logger().info(
+            f"Place divot set to ({self.place_row:.2f},{self.place_col:.2f})",
+            throttle_duration_sec=1.0
+        )
         return SetParametersResult(successful=True)
 
 

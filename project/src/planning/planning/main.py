@@ -1,5 +1,6 @@
 from std_srvs.srv import Trigger
 import sys
+import subprocess
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -200,6 +201,8 @@ class UR7e_CubeGrasp(Node):
             self.job_queue.append(place_joints)
             self.job_queue.append('toggle_grip')
             self.job_queue.append(place_hover_joints)
+            self.job_queue.append('reset_state')
+            self.job_queue.append('tuck')
         else:
             self.get_logger().error("Place IK failed")
             self.job_queue = []
@@ -230,6 +233,9 @@ class UR7e_CubeGrasp(Node):
             self.get_logger().info("Toggling gripper")
             self._toggle_gripper()
 
+        elif next_job in ('reset_state', 'tuck'):
+            self._run_command(next_job)
+
         else:
             self.get_logger().error("Unknown job type.")
             self.execute_jobs()
@@ -245,6 +251,31 @@ class UR7e_CubeGrasp(Node):
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
 
         self.get_logger().info('Gripper toggled.')
+        self.execute_jobs()
+
+    def _run_command(self, command):
+        self.get_logger().info(f"Running {command}")
+
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                check=False,
+                timeout=30.0
+            )
+        except subprocess.TimeoutExpired:
+            self.get_logger().error(f"{command} timed out")
+            rclpy.shutdown()
+            return
+
+        if result.returncode != 0:
+            self.get_logger().error(
+                f"{command} failed with return code {result.returncode}"
+            )
+            rclpy.shutdown()
+            return
+
+        self.get_logger().info(f"{command} complete")
         self.execute_jobs()
 
     def _execute_joint_trajectory(self, joint_traj):
