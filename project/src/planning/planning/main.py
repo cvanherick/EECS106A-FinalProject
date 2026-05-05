@@ -58,8 +58,14 @@ class UR7e_CubeGrasp(Node):
         self.grasp_offset = 0.14
         self.place_down_adjustment = 0.01
         self.ur7e_utils_commands = {
-            'reset_state': ['ros2', 'run', 'ur7e_utils', 'reset_state'],
-            'tuck': ['ros2', 'run', 'ur7e_utils', 'tuck']
+            'reset_state': [
+                ['ros2', 'run', 'ur7e_utils', 'reset_state'],
+                ['reset_state']
+            ],
+            'tuck': [
+                ['ros2', 'run', 'ur7e_utils', 'tuck'],
+                ['tuck']
+            ]
         }
 
         # ✅ NEW: marker publisher
@@ -131,7 +137,7 @@ class UR7e_CubeGrasp(Node):
 
         board_q = self.board_pose.pose.orientation
         board_yaw = 2.0 * np.arctan2(board_q.z, board_q.w)
-        board_place_yaw = board_yaw + (np.pi / 2.0)
+        board_place_yaw = board_yaw
         q_place_rot = R.from_euler('ZYX', [board_place_yaw, np.pi, 0.0])
         q_place = q_place_rot.as_quat()
 
@@ -265,28 +271,34 @@ class UR7e_CubeGrasp(Node):
         self.execute_jobs()
 
     def _run_command(self, command):
-        cmd = self.ur7e_utils_commands.get(command, [command])
-        self.get_logger().info(f"Running {' '.join(cmd)}")
+        candidate_cmds = self.ur7e_utils_commands.get(command, [[command]])
 
-        try:
-            result = subprocess.run(
-                cmd,
-                check=False,
-                timeout=30.0
-            )
-        except subprocess.TimeoutExpired:
-            self.get_logger().error(f"{' '.join(cmd)} timed out")
-            rclpy.shutdown()
-            return
+        for cmd in candidate_cmds:
+            self.get_logger().info(f"Running {' '.join(cmd)}")
 
-        if result.returncode != 0:
-            self.get_logger().error(
+            try:
+                result = subprocess.run(
+                    cmd,
+                    check=False,
+                    timeout=30.0
+                )
+            except FileNotFoundError:
+                self.get_logger().warn(f"{cmd[0]} not found")
+                continue
+            except subprocess.TimeoutExpired:
+                self.get_logger().warn(f"{' '.join(cmd)} timed out")
+                continue
+
+            if result.returncode == 0:
+                self.get_logger().info(f"{' '.join(cmd)} complete")
+                self.execute_jobs()
+                return
+
+            self.get_logger().warn(
                 f"{' '.join(cmd)} failed with return code {result.returncode}"
             )
-            rclpy.shutdown()
-            return
 
-        self.get_logger().info(f"{' '.join(cmd)} complete")
+        self.get_logger().error(f"All {command} command attempts failed")
         self.execute_jobs()
 
     def _execute_joint_trajectory(self, joint_traj):
