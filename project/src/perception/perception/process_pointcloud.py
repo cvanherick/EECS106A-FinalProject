@@ -438,7 +438,7 @@ class RealSensePCSubscriber(Node):
 
         pose.pose.position.x = float(centroid[0])
         pose.pose.position.y = float(centroid[1])
-        pose.pose.position.z = float(centroid[2]) - 0.008
+        pose.pose.position.z = float(centroid[2]) - 0.015
 
         half = yaw / 2.0
         pose.pose.orientation.z = float(np.sin(half))
