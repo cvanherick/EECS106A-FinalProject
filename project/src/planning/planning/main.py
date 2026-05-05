@@ -57,6 +57,10 @@ class UR7e_CubeGrasp(Node):
         self.approach_offset = 0.185
         self.grasp_offset = 0.14
         self.place_down_adjustment = 0.01
+        self.ur7e_utils_commands = {
+            'reset_state': ['ros2', 'run', 'ur7e_utils', 'reset_state'],
+            'tuck': ['ros2', 'run', 'ur7e_utils', 'tuck']
+        }
 
         # ✅ NEW: marker publisher
         self.target_marker_pub = self.create_publisher(
@@ -261,28 +265,28 @@ class UR7e_CubeGrasp(Node):
         self.execute_jobs()
 
     def _run_command(self, command):
-        self.get_logger().info(f"Running {command}")
+        cmd = self.ur7e_utils_commands.get(command, [command])
+        self.get_logger().info(f"Running {' '.join(cmd)}")
 
         try:
             result = subprocess.run(
-                command,
-                shell=True,
+                cmd,
                 check=False,
                 timeout=30.0
             )
         except subprocess.TimeoutExpired:
-            self.get_logger().error(f"{command} timed out")
+            self.get_logger().error(f"{' '.join(cmd)} timed out")
             rclpy.shutdown()
             return
 
         if result.returncode != 0:
             self.get_logger().error(
-                f"{command} failed with return code {result.returncode}"
+                f"{' '.join(cmd)} failed with return code {result.returncode}"
             )
             rclpy.shutdown()
             return
 
-        self.get_logger().info(f"{command} complete")
+        self.get_logger().info(f"{' '.join(cmd)} complete")
         self.execute_jobs()
 
     def _execute_joint_trajectory(self, joint_traj):
