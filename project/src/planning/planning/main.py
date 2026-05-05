@@ -53,6 +53,8 @@ class UR7e_CubeGrasp(Node):
         self.ik_planner = IKPlanner()
 
         self.job_queue = []
+        self.approach_offset = 0.185
+        self.grasp_offset = 0.14
 
         # ✅ NEW: marker publisher
         self.target_marker_pub = self.create_publisher(
@@ -126,7 +128,7 @@ class UR7e_CubeGrasp(Node):
             self.joint_state,
             cube_pose.pose.position.x,
             cube_pose.pose.position.y,
-            cube_pose.pose.position.z + 0.185,
+            cube_pose.pose.position.z + self.approach_offset,
             qx=float(q_final[0]),
             qy=float(q_final[1]),
             qz=float(q_final[2]),
@@ -141,7 +143,7 @@ class UR7e_CubeGrasp(Node):
             self.joint_state,
             cube_pose.pose.position.x,
             cube_pose.pose.position.y,
-            cube_pose.pose.position.z + 0.14,
+            cube_pose.pose.position.z + self.grasp_offset,
             qx=float(q_final[0]),
             qy=float(q_final[1]),
             qz=float(q_final[2]),
@@ -158,31 +160,50 @@ class UR7e_CubeGrasp(Node):
 
         board_x = self.board_pose.pose.position.x
         board_y = self.board_pose.pose.position.y
-        board_z = self.board_pose.pose.position.z + 0.35
+        board_z = self.board_pose.pose.position.z
+        place_hover_z = board_z + self.approach_offset
+        place_z = board_z + self.grasp_offset
 
         self.get_logger().info(
-            f"Board hover target: x={board_x:.3f}, y={board_y:.3f}, z={board_z:.3f}"
+            f"Board divot target: x={board_x:.3f}, y={board_y:.3f}, "
+            f"z={place_z:.3f}"
         )
 
         # ✅ VISUALIZE TARGET
-        self.publish_place_marker(board_x, board_y, board_z)
+        self.publish_place_marker(board_x, board_y, place_z)
 
-        release_joints = self.ik_planner.compute_ik(
+        place_hover_joints = self.ik_planner.compute_ik(
             self.joint_state,
             board_x,
             board_y,
-            board_z,
+            place_hover_z,
             qx=float(q_final[0]),
             qy=float(q_final[1]),
             qz=float(q_final[2]),
             qw=float(q_final[3])
         )
 
-        if release_joints:
-            self.get_logger().info("Board hover IK succeeded, adding release move")
-            self.job_queue.append(release_joints)
+        place_joints = self.ik_planner.compute_ik(
+            self.joint_state,
+            board_x,
+            board_y,
+            place_z,
+            qx=float(q_final[0]),
+            qy=float(q_final[1]),
+            qz=float(q_final[2]),
+            qw=float(q_final[3])
+        )
+
+        if place_hover_joints and place_joints:
+            self.get_logger().info("Place IK succeeded, adding place sequence")
+            self.job_queue.append(place_hover_joints)
+            self.job_queue.append(place_joints)
+            self.job_queue.append('toggle_grip')
+            self.job_queue.append(place_hover_joints)
         else:
-            self.get_logger().error("Board hover IK failed")
+            self.get_logger().error("Place IK failed")
+            self.job_queue = []
+            return
 
         self.execute_jobs()
 
