@@ -38,6 +38,7 @@ class RealSensePCSubscriber(Node):
         )
 
         self.board_origin = None
+        self.board_center = None
         self.board_z = None
         self.row_step = self.CELL_SIZE
         self.col_step = self.CELL_SIZE
@@ -182,88 +183,66 @@ class RealSensePCSubscriber(Node):
         corner_indices = np.argsort(distances)[-4:]
         corners = centroids[corner_indices]
 
-        best = None
-        best_score = -np.inf
+        centered = corners[:, :2] - center
+        _, _, vh = np.linalg.svd(centered, full_matrices=False)
+        axis_a = vh[0]
+        axis_b = vh[1]
 
-        for origin_idx in range(4):
-            origin_xy = corners[origin_idx, :2]
-            others = [i for i in range(4) if i != origin_idx]
-            vectors = [(i, corners[i, :2] - origin_xy) for i in others]
-            diagonal_idx, _ = max(
-                vectors,
-                key=lambda item: np.linalg.norm(item[1])
-            )
-            adjacent = [(i, v) for i, v in vectors if i != diagonal_idx]
+        span_a = np.ptp(centered @ axis_a)
+        span_b = np.ptp(centered @ axis_b)
 
-            if len(adjacent) != 2:
-                continue
-
-            _, first_vec = adjacent[0]
-            _, second_vec = adjacent[1]
-
-            first_len = np.linalg.norm(first_vec)
-            second_len = np.linalg.norm(second_vec)
-
-            if first_len == 0.0 or second_len == 0.0:
-                continue
-
-            first_dir = first_vec / first_len
-            second_dir = second_vec / second_len
-
-            first_as_row = (
-                np.dot(first_dir, self.row_dir)
-                + np.dot(second_dir, self.col_dir)
-            )
-            second_as_row = (
-                np.dot(second_dir, self.row_dir)
-                + np.dot(first_dir, self.col_dir)
-            )
-
-            if first_as_row >= second_as_row:
-                row_vec = first_vec
-                col_vec = second_vec
-            else:
-                row_vec = second_vec
-                col_vec = first_vec
-
-            row_len = np.linalg.norm(row_vec)
-            col_len = np.linalg.norm(col_vec)
-
-            if row_len == 0.0 or col_len == 0.0:
-                continue
-
-            row_dir = row_vec / row_len
-            col_dir = col_vec / col_len
-            score = (
-                np.dot(row_dir, self.row_dir)
-                + np.dot(col_dir, self.col_dir)
-            )
-
-            if score > best_score:
-                best_score = score
-                best = origin_xy, row_dir, col_dir, row_len, col_len
-
-        if best is None:
+        if span_a == 0.0 or span_b == 0.0:
             self.get_logger().warn(
                 "Could not infer board frame from corner markers"
             )
             return False
 
-        origin_xy, row_dir, col_dir, row_len, col_len = best
+        if span_a >= span_b:
+            long_dir = axis_a
+            short_dir = axis_b
+            long_span = span_a
+            short_span = span_b
+        else:
+            long_dir = axis_b
+            short_dir = axis_a
+            long_span = span_b
+            short_span = span_a
 
-        self.board_origin = origin_xy
+        row_dir = long_dir
+        col_dir = short_dir
+
+        if np.dot(row_dir, self.row_dir) < 0.0:
+            row_dir = -row_dir
+
+        if np.dot(col_dir, self.col_dir) < 0.0:
+            col_dir = -col_dir
+
+        self.board_center = center
+        self.board_origin = (
+            center
+            - ((self.board_rows - 1) / 2.0) * self.CELL_SIZE * row_dir
+            - ((self.board_cols - 1) / 2.0) * self.CELL_SIZE * col_dir
+        )
+
         self.board_z = float(np.mean(corners[:, 2]))
         self.row_dir = row_dir
         self.col_dir = col_dir
-        self.row_step = row_len / self.corner_span_rows
-        self.col_step = col_len / self.corner_span_cols
+        self.row_step = self.CELL_SIZE
+        self.col_step = self.CELL_SIZE
 
         self.get_logger().info("===== BOARD FRAME SET FROM 4 CORNERS =====")
         self.get_logger().info(
             f"Origin P00: x={self.board_origin[0]:.4f}, "
             f"y={self.board_origin[1]:.4f}"
         )
+        self.get_logger().info(
+            f"Center: x={self.board_center[0]:.4f}, "
+            f"y={self.board_center[1]:.4f}"
+        )
         self.get_logger().info(f"Board z: {self.board_z:.4f}")
+        self.get_logger().info(
+            f"Observed spans: long={long_span:.4f}, short={short_span:.4f}"
+        )
         self.get_logger().info(
             f"Row dir: [{self.row_dir[0]:.4f}, {self.row_dir[1]:.4f}], "
             f"step={self.row_step:.4f}"
