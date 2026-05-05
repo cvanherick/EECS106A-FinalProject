@@ -62,13 +62,13 @@ class RealSensePCSubscriber(Node):
         self.target_row = float(
             self.declare_parameter(
                 'target_row',
-                (self.board_rows - 1) / 2.0
+                5.0
             ).value
         )
         self.target_col = float(
             self.declare_parameter(
                 'target_col',
-                (self.board_cols - 1) / 2.0
+                5.0
             ).value
         )
 
