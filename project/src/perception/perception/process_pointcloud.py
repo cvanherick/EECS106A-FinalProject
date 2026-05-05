@@ -15,23 +15,48 @@ class RealSensePCSubscriber(Node):
     def __init__(self):
         super().__init__('realsense_pc_subscriber')
 
-        self.target_frame = self.declare_parameter('target_frame', 'base_link').value
+        self.target_frame = self.declare_parameter(
+            'target_frame',
+            'base_link'
+        ).value
 
         self.cluster_dist_thresh = 0.003
         self.cluster_min_pts = 50
         self.block_unit = 0.03
 
+        # NOTE: If the robot is overshooting, measure the physical
+        # distance between two peg centers and update this number!
+        self.CELL_SIZE = 0.03
+
         self.board_origin = None
         self.board_z = None
-        
-        # NOTE: If the robot is still overshooting slightly, measure the physical 
-        # distance between two peg centers and update this number!
-        self.CELL_SIZE = 0.03 
+        self.row_step = self.CELL_SIZE
+        self.col_step = self.CELL_SIZE
+        self.corner_span_rows = max(
+            1,
+            int(self.declare_parameter('corner_span_rows', 5).value)
+        )
+        self.corner_span_cols = max(
+            1,
+            int(self.declare_parameter('corner_span_cols', 5).value)
+        )
+        self.target_row = float(
+            self.declare_parameter(
+                'target_row',
+                self.corner_span_rows / 2.0
+            ).value
+        )
+        self.target_col = float(
+            self.declare_parameter(
+                'target_col',
+                self.corner_span_cols / 2.0
+            ).value
+        )
 
-        # Hardcoded axes. Note: Y is flipped to 1.0 to prevent moving the wrong way!
+        # Hardcoded axes. Y is flipped to 1.0 to prevent moving the wrong way.
         self.row_dir = np.array([-1.0, 0.0])
         self.col_dir = np.array([0.0, 1.0])
-        
+
         self.row_dir = self.row_dir / np.linalg.norm(self.row_dir)
         self.col_dir = self.col_dir / np.linalg.norm(self.col_dir)
 
@@ -45,8 +70,16 @@ class RealSensePCSubscriber(Node):
             10
         )
 
-        self.pose_pub = self.create_publisher(PoseStamped, '/cube_pose_red', 10)
-        self.block_info_pub = self.create_publisher(String, '/detected_blocks', 10)
+        self.pose_pub = self.create_publisher(
+            PoseStamped,
+            '/cube_pose_red',
+            10
+        )
+        self.block_info_pub = self.create_publisher(
+            String,
+            '/detected_blocks',
+            10
+        )
 
         self.board_test_pose_pub = self.create_publisher(
             PoseStamped,
@@ -108,21 +141,127 @@ class RealSensePCSubscriber(Node):
 
         return f"{n_long}x{n_short}"
 
-    def set_board_origin(self, cluster):
-        centroid = np.mean(cluster, axis=0)
+    def set_board_from_corner_markers(self, corner_clusters):
+        centroids = np.array([
+            np.mean(cluster, axis=0)
+            for cluster in corner_clusters
+        ])
 
-        self.board_origin = np.array([centroid[0], centroid[1]])
-        self.board_z = centroid[2]
+        if len(centroids) < 4:
+            return False
 
-        self.get_logger().info("===== BOARD ORIGIN SET =====")
-        self.get_logger().info(f"Origin P00: x={self.board_origin[0]:.4f}, y={self.board_origin[1]:.4f}")
+        xy_all = centroids[:, :2]
+        center = np.mean(xy_all, axis=0)
+
+        # If extra 1x1 red blocks are visible, use the four outermost markers.
+        distances = np.linalg.norm(xy_all - center, axis=1)
+        corner_indices = np.argsort(distances)[-4:]
+        corners = centroids[corner_indices]
+
+        best = None
+        best_score = -np.inf
+
+        for origin_idx in range(4):
+            origin_xy = corners[origin_idx, :2]
+            others = [i for i in range(4) if i != origin_idx]
+            vectors = [(i, corners[i, :2] - origin_xy) for i in others]
+            diagonal_idx, _ = max(
+                vectors,
+                key=lambda item: np.linalg.norm(item[1])
+            )
+            adjacent = [(i, v) for i, v in vectors if i != diagonal_idx]
+
+            if len(adjacent) != 2:
+                continue
+
+            _, first_vec = adjacent[0]
+            _, second_vec = adjacent[1]
+
+            first_len = np.linalg.norm(first_vec)
+            second_len = np.linalg.norm(second_vec)
+
+            if first_len == 0.0 or second_len == 0.0:
+                continue
+
+            first_dir = first_vec / first_len
+            second_dir = second_vec / second_len
+
+            first_as_row = (
+                np.dot(first_dir, self.row_dir)
+                + np.dot(second_dir, self.col_dir)
+            )
+            second_as_row = (
+                np.dot(second_dir, self.row_dir)
+                + np.dot(first_dir, self.col_dir)
+            )
+
+            if first_as_row >= second_as_row:
+                row_vec = first_vec
+                col_vec = second_vec
+            else:
+                row_vec = second_vec
+                col_vec = first_vec
+
+            row_len = np.linalg.norm(row_vec)
+            col_len = np.linalg.norm(col_vec)
+
+            if row_len == 0.0 or col_len == 0.0:
+                continue
+
+            row_dir = row_vec / row_len
+            col_dir = col_vec / col_len
+            score = (
+                np.dot(row_dir, self.row_dir)
+                + np.dot(col_dir, self.col_dir)
+            )
+
+            if score > best_score:
+                best_score = score
+                best = origin_xy, row_dir, col_dir, row_len, col_len
+
+        if best is None:
+            self.get_logger().warn(
+                "Could not infer board frame from corner markers"
+            )
+            return False
+
+        origin_xy, row_dir, col_dir, row_len, col_len = best
+
+        self.board_origin = origin_xy
+        self.board_z = float(np.mean(corners[:, 2]))
+        self.row_dir = row_dir
+        self.col_dir = col_dir
+        self.row_step = row_len / self.corner_span_rows
+        self.col_step = col_len / self.corner_span_cols
+
+        self.get_logger().info("===== BOARD FRAME SET FROM 4 CORNERS =====")
+        self.get_logger().info(
+            f"Origin P00: x={self.board_origin[0]:.4f}, "
+            f"y={self.board_origin[1]:.4f}"
+        )
         self.get_logger().info(f"Board z: {self.board_z:.4f}")
+        self.get_logger().info(
+            f"Row dir: [{self.row_dir[0]:.4f}, {self.row_dir[1]:.4f}], "
+            f"step={self.row_step:.4f}"
+        )
+        self.get_logger().info(
+            f"Col dir: [{self.col_dir[0]:.4f}, {self.col_dir[1]:.4f}], "
+            f"step={self.col_step:.4f}"
+        )
         self.get_logger().info("============================")
 
         # DEBUG: check grid directions
-        for r, c in [(0,0), (5,0), (0,5), (5,5)]:
+        debug_cells = [
+            (0, 0),
+            (self.corner_span_rows, 0),
+            (0, self.corner_span_cols),
+            (self.corner_span_rows, self.corner_span_cols)
+        ]
+        for r, c in debug_cells:
             wx, wy, _ = self.board_to_world(r, c)
             self.get_logger().info(f"({r},{c}) maps to: ({wx:.3f}, {wy:.3f})")
+
+        return True
 
     def board_to_world(self, row, col):
         if self.board_origin is None:
@@ -130,8 +269,8 @@ class RealSensePCSubscriber(Node):
 
         xy = (
             self.board_origin
-            + row * self.CELL_SIZE * self.row_dir
-            + col * self.CELL_SIZE * self.col_dir
+            + row * self.row_step * self.row_dir
+            + col * self.col_step * self.col_dir
         )
 
         return float(xy[0]), float(xy[1]), float(self.board_z)
@@ -167,7 +306,10 @@ class RealSensePCSubscriber(Node):
                 Time()
             )
         except TransformException as ex:
-            self.get_logger().warn(f"TF error: {ex}", throttle_duration_sec=2.0)
+            self.get_logger().warn(
+                f"TF error: {ex}",
+                throttle_duration_sec=2.0
+            )
             return
 
         cloud = do_transform_cloud(msg, tf)
@@ -178,7 +320,10 @@ class RealSensePCSubscriber(Node):
             skip_nans=True
         )
 
-        xyz = np.column_stack((raw['x'], raw['y'], raw['z'])).astype(np.float32, copy=False)
+        xyz = np.column_stack((raw['x'], raw['y'], raw['z'])).astype(
+            np.float32,
+            copy=False
+        )
 
         rgb = raw['rgb'].view(np.uint32)
         r = (rgb >> 16) & 255
@@ -193,28 +338,38 @@ class RealSensePCSubscriber(Node):
 
         clusters = self.euclidean_clustering(pts)
 
-        # 1. PASS ONE: Look ONLY for the 1x1 marker to establish the board origin
-        if self.board_origin is None:
-            for cluster in clusters:
-                shape = self.estimate_shape(cluster)
-                if shape == "1x1":
-                    self.get_logger().info("Found 1x1 marker, setting board origin")
-                    self.set_board_origin(cluster)
-                    break # Board origin found! Stop looping.
+        one_by_one_clusters = [
+            cluster for cluster in clusters
+            if self.estimate_shape(cluster) == "1x1"
+        ]
 
-        # 2. PASS TWO: Process pickable blocks ONLY IF the board is safely calibrated
+        # 1. PASS ONE: Use four 1x1 red corners to establish the board frame
+        if self.board_origin is None:
+            if len(one_by_one_clusters) >= 4:
+                self.get_logger().info(
+                    "Found at least four 1x1 markers, setting board frame"
+                )
+                self.set_board_from_corner_markers(one_by_one_clusters)
+            else:
+                self.get_logger().info(
+                    "Waiting for 4 corner markers, currently seeing "
+                    f"{len(one_by_one_clusters)}",
+                    throttle_duration_sec=2.0
+                )
+
+        # 2. PASS TWO: Process pickable blocks after board calibration
         if self.board_origin is not None:
             for cluster in clusters:
                 shape = self.estimate_shape(cluster)
-                
+
                 # Do not publish the origin marker as a pickable block
                 if shape == "1x1":
-                    continue 
+                    continue
 
                 self.process_block(cluster, cloud.header)
 
             # Publish the test pose constantly so main.py always receives it
-            self.publish_board_test_pose(5, 5)
+            self.publish_board_test_pose(self.target_row, self.target_col)
 
     def process_block(self, pts, header):
         mean = np.mean(pts, axis=0)
@@ -268,7 +423,10 @@ class RealSensePCSubscriber(Node):
         self.pose_pub.publish(pose)
 
         msg = String()
-        msg.data = f"{shape}|x:{centroid[0]:.3f},y:{centroid[1]:.3f},z:{centroid[2]:.3f}"
+        msg.data = (
+            f"{shape}|x:{centroid[0]:.3f},"
+            f"y:{centroid[1]:.3f},z:{centroid[2]:.3f}"
+        )
         self.block_info_pub.publish(msg)
 
     def _on_parameter_update(self, params):
