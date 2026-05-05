@@ -56,6 +56,7 @@ class UR7e_CubeGrasp(Node):
         self.job_queue = []
         self.approach_offset = 0.185
         self.grasp_offset = 0.14
+        self.place_down_adjustment = 0.01
 
         # ✅ NEW: marker publisher
         self.target_marker_pub = self.create_publisher(
@@ -163,7 +164,7 @@ class UR7e_CubeGrasp(Node):
         board_y = self.board_pose.pose.position.y
         board_z = self.board_pose.pose.position.z
         place_hover_z = board_z + self.approach_offset
-        place_z = board_z + self.grasp_offset
+        place_z = board_z + self.grasp_offset - self.place_down_adjustment
 
         self.get_logger().info(
             f"Board divot target: x={board_x:.3f}, y={board_y:.3f}, "
