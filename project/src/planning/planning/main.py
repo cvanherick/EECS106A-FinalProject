@@ -103,6 +103,15 @@ class UR7e_CubeGrasp(Node):
             self.get_logger().info("No joint state yet, cannot proceed")
             return
 
+        # Wait until perception has published the four-corner board target.
+        # Do this before latching cube_pose so a later cube message can retry.
+        if self.board_pose is None:
+            self.get_logger().info(
+                "No board pose yet, waiting for /board_test_pose",
+                throttle_duration_sec=2.0
+            )
+            return
+
         self.cube_pose = cube_pose
         q = cube_pose.pose.orientation
 
@@ -146,11 +155,6 @@ class UR7e_CubeGrasp(Node):
 
         if pre_grasp_joints:
             self.job_queue.append(pre_grasp_joints)
-
-        # --- PLACE ---
-        if self.board_pose is None:
-            self.get_logger().error("No board pose yet, cannot move to board")
-            return
 
         board_x = self.board_pose.pose.position.x
         board_y = self.board_pose.pose.position.y

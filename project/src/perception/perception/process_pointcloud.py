@@ -359,6 +359,10 @@ class RealSensePCSubscriber(Node):
 
         # 2. PASS TWO: Process pickable blocks after board calibration
         if self.board_origin is not None:
+            # Publish board pose before cube poses so planning has the place target
+            # by the time the first pick callback fires.
+            self.publish_board_test_pose(self.target_row, self.target_col)
+
             for cluster in clusters:
                 shape = self.estimate_shape(cluster)
 
@@ -367,9 +371,6 @@ class RealSensePCSubscriber(Node):
                     continue
 
                 self.process_block(cluster, cloud.header)
-
-            # Publish the test pose constantly so main.py always receives it
-            self.publish_board_test_pose(self.target_row, self.target_col)
 
     def process_block(self, pts, header):
         mean = np.mean(pts, axis=0)
