@@ -22,11 +22,20 @@ class RealSensePCSubscriber(Node):
 
         self.cluster_dist_thresh = 0.003
         self.cluster_min_pts = 50
-        self.block_unit = 0.03
+        self.block_unit = 0.03175
 
         # NOTE: If the robot is overshooting, measure the physical
         # distance between two peg centers and update this number!
-        self.CELL_SIZE = 0.03
+        self.CELL_SIZE = 0.03175
+
+        self.board_rows = max(
+            1,
+            int(self.declare_parameter('board_rows', 12).value)
+        )
+        self.board_cols = max(
+            1,
+            int(self.declare_parameter('board_cols', 10).value)
+        )
 
         self.board_origin = None
         self.board_z = None
@@ -34,22 +43,32 @@ class RealSensePCSubscriber(Node):
         self.col_step = self.CELL_SIZE
         self.corner_span_rows = max(
             1,
-            int(self.declare_parameter('corner_span_rows', 5).value)
+            int(
+                self.declare_parameter(
+                    'corner_span_rows',
+                    self.board_rows - 1
+                ).value
+            )
         )
         self.corner_span_cols = max(
             1,
-            int(self.declare_parameter('corner_span_cols', 5).value)
+            int(
+                self.declare_parameter(
+                    'corner_span_cols',
+                    self.board_cols - 1
+                ).value
+            )
         )
         self.target_row = float(
             self.declare_parameter(
                 'target_row',
-                self.corner_span_rows / 2.0
+                (self.board_rows - 1) / 2.0
             ).value
         )
         self.target_col = float(
             self.declare_parameter(
                 'target_col',
-                self.corner_span_cols / 2.0
+                (self.board_cols - 1) / 2.0
             ).value
         )
 
@@ -90,6 +109,11 @@ class RealSensePCSubscriber(Node):
         self.add_on_set_parameters_callback(self._on_parameter_update)
 
         self.get_logger().info("Red block marker clustering initialized.")
+        self.get_logger().info(
+            f"Board defaults: {self.board_rows}x{self.board_cols}, "
+            f"target=({self.target_row:.1f},{self.target_col:.1f}), "
+            f"cell={self.CELL_SIZE:.5f} m"
+        )
 
     def euclidean_clustering(self, points):
         clusters = []
@@ -359,8 +383,8 @@ class RealSensePCSubscriber(Node):
 
         # 2. PASS TWO: Process pickable blocks after board calibration
         if self.board_origin is not None:
-            # Publish board pose before cube poses so planning has the place target
-            # by the time the first pick callback fires.
+            # Publish board pose before cube poses so planning has the target
+            # before the first pick callback fires.
             self.publish_board_test_pose(self.target_row, self.target_col)
 
             for cluster in clusters:
