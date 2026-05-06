@@ -64,10 +64,10 @@ def generate_launch_description():
         }.items(),
     )
 
-    ik_planner_node = Node(
+    cube_grasp_node = Node(
         package='planning',
-        executable='ik',
-        name='ik_node',
+        executable='main',
+        name='cube_grasp',
         output='screen'
     )
 
@@ -90,7 +90,7 @@ def generate_launch_description():
         perception_node,
         planning_tf_node,
         moveit_launch, 
-        ik_planner_node, 
+        cube_grasp_node, 
 
         # Global handler (keep at end)
         shutdown_on_any_exit,

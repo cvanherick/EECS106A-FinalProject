@@ -23,6 +23,24 @@ class RealSensePCSubscriber(Node):
         self.cluster_dist_thresh = 0.003
         self.cluster_min_pts = 50
         self.block_unit = 0.03175
+        self.block_pick_z_offset = float(
+            self.declare_parameter('block_pick_z_offset', -0.015).value
+        )
+        self.pick_x_offset = float(
+            self.declare_parameter('pick_x_offset', 0.0).value
+        )
+        self.pick_y_offset = float(
+            self.declare_parameter('pick_y_offset', 0.0).value
+        )
+        self.place_x_offset = float(
+            self.declare_parameter('place_x_offset', 0.0).value
+        )
+        self.place_y_offset = float(
+            self.declare_parameter('place_y_offset', 0.0).value
+        )
+        self.use_measured_grid = bool(
+            self.declare_parameter('use_measured_grid', True).value
+        )
 
         # NOTE: If the robot is overshooting, measure the physical
         # distance between two peg centers and update this number!
@@ -217,18 +235,24 @@ class RealSensePCSubscriber(Node):
         if np.dot(col_dir, self.col_dir) < 0.0:
             col_dir = -col_dir
 
+        row_step = self.CELL_SIZE
+        col_step = self.CELL_SIZE
+        if self.use_measured_grid:
+            row_step = long_span / float(self.corner_span_rows)
+            col_step = short_span / float(self.corner_span_cols)
+
         self.board_center = center
         self.board_origin = (
             center
-            - ((self.board_rows - 1) / 2.0) * self.CELL_SIZE * row_dir
-            - ((self.board_cols - 1) / 2.0) * self.CELL_SIZE * col_dir
+            - (self.corner_span_rows / 2.0) * row_step * row_dir
+            - (self.corner_span_cols / 2.0) * col_step * col_dir
         )
 
         self.board_z = float(np.mean(corners[:, 2]))
         self.row_dir = row_dir
         self.col_dir = col_dir
-        self.row_step = self.CELL_SIZE
-        self.col_step = self.CELL_SIZE
+        self.row_step = row_step
+        self.col_step = col_step
 
         self.get_logger().info("===== BOARD FRAME SET FROM 4 CORNERS =====")
         self.get_logger().info(
@@ -242,6 +266,10 @@ class RealSensePCSubscriber(Node):
         self.get_logger().info(f"Board z: {self.board_z:.4f}")
         self.get_logger().info(
             f"Observed spans: long={long_span:.4f}, short={short_span:.4f}"
+        )
+        self.get_logger().info(
+            f"Measured steps: row={self.row_step:.5f}, "
+            f"col={self.col_step:.5f}; nominal={self.CELL_SIZE:.5f}"
         )
         self.get_logger().info(
             f"Row dir: [{self.row_dir[0]:.4f}, {self.row_dir[1]:.4f}], "
@@ -284,8 +312,31 @@ class RealSensePCSubscriber(Node):
             + row * self.row_step * self.row_dir
             + col * self.col_step * self.col_dir
         )
+        xy = xy + np.array([self.place_x_offset, self.place_y_offset])
 
         return float(xy[0]), float(xy[1]), float(self.board_z)
+
+    def estimate_oriented_box(self, pts):
+        xy = pts[:, :2]
+        mean_xy = np.mean(xy, axis=0)
+        xy_centered = xy - mean_xy
+
+        cov = np.cov(xy_centered.T)
+        eigvals, eigvecs = np.linalg.eigh(cov)
+        order = np.argsort(eigvals)[::-1]
+        eigvecs = eigvecs[:, order]
+
+        aligned = xy_centered @ eigvecs
+        min_xy = np.min(aligned, axis=0)
+        max_xy = np.max(aligned, axis=0)
+        lengths = max_xy - min_xy
+
+        center_aligned = (min_xy + max_xy) / 2.0
+        center_xy = mean_xy + center_aligned @ eigvecs.T
+        principal = eigvecs[:, 0]
+        yaw = np.arctan2(principal[1], principal[0])
+
+        return center_xy, yaw, lengths
 
     def is_valid_divot(self, row, col):
         return (
@@ -410,21 +461,7 @@ class RealSensePCSubscriber(Node):
             return
 
         centroid = np.mean(clean, axis=0)
-
-        xy = clean[:, :2]
-        xy_centered = xy - centroid[:2]
-
-        cov = np.cov(xy_centered.T)
-        eigvals, eigvecs = np.linalg.eig(cov)
-
-        principal = eigvecs[:, np.argmax(eigvals)]
-        yaw = np.arctan2(principal[1], principal[0])
-
-        aligned = xy_centered @ eigvecs
-        min_xy = np.min(aligned, axis=0)
-        max_xy = np.max(aligned, axis=0)
-
-        lengths = max_xy - min_xy
+        center_xy, yaw, lengths = self.estimate_oriented_box(clean)
 
         long_side = max(lengths)
         short_side = min(lengths)
@@ -439,9 +476,9 @@ class RealSensePCSubscriber(Node):
         pose = PoseStamped()
         pose.header = header
 
-        pose.pose.position.x = float(centroid[0])
-        pose.pose.position.y = float(centroid[1])
-        pose.pose.position.z = float(centroid[2]) - 0.015
+        pose.pose.position.x = float(center_xy[0] + self.pick_x_offset)
+        pose.pose.position.y = float(center_xy[1] + self.pick_y_offset)
+        pose.pose.position.z = float(centroid[2] + self.block_pick_z_offset)
 
         half = yaw / 2.0
         pose.pose.orientation.z = float(np.sin(half))
@@ -451,8 +488,8 @@ class RealSensePCSubscriber(Node):
 
         msg = String()
         msg.data = (
-            f"{shape}|x:{centroid[0]:.3f},"
-            f"y:{centroid[1]:.3f},z:{centroid[2]:.3f}"
+            f"{shape}|x:{pose.pose.position.x:.3f},"
+            f"y:{pose.pose.position.y:.3f},z:{pose.pose.position.z:.3f}"
         )
         self.block_info_pub.publish(msg)
 
@@ -466,6 +503,18 @@ class RealSensePCSubscriber(Node):
                 self.place_row = float(param.value)
             elif param.name == 'target_col':
                 self.place_col = float(param.value)
+            elif param.name == 'block_pick_z_offset':
+                self.block_pick_z_offset = float(param.value)
+            elif param.name == 'pick_x_offset':
+                self.pick_x_offset = float(param.value)
+            elif param.name == 'pick_y_offset':
+                self.pick_y_offset = float(param.value)
+            elif param.name == 'place_x_offset':
+                self.place_x_offset = float(param.value)
+            elif param.name == 'place_y_offset':
+                self.place_y_offset = float(param.value)
+            elif param.name == 'use_measured_grid':
+                self.use_measured_grid = bool(param.value)
 
         self.get_logger().info(
             f"Place divot set to ({self.place_row:.2f},{self.place_col:.2f})",

@@ -12,7 +12,8 @@ from sensor_msgs.msg import JointState
 from tf2_ros import Buffer, TransformListener
 from scipy.spatial.transform import Rotation as R
 import numpy as np
-from visualization_msgs.msg import Marker  # ✅ NEW
+from visualization_msgs.msg import Marker
+from rcl_interfaces.msg import SetParametersResult
 
 from planning.ik import IKPlanner
 
@@ -54,9 +55,28 @@ class UR7e_CubeGrasp(Node):
         self.ik_planner = IKPlanner()
 
         self.job_queue = []
-        self.approach_offset = 0.185
-        self.grasp_offset = 0.14
-        self.place_down_adjustment = 0.01
+        self.approach_offset = float(
+            self.declare_parameter('approach_offset', 0.185).value
+        )
+        self.grasp_offset = float(
+            self.declare_parameter('grasp_offset', 0.14).value
+        )
+        self.place_down_adjustment = float(
+            self.declare_parameter('place_down_adjustment', 0.01).value
+        )
+        self.place_x_offset = float(
+            self.declare_parameter('place_x_offset', 0.0).value
+        )
+        self.place_y_offset = float(
+            self.declare_parameter('place_y_offset', 0.0).value
+        )
+        self.pick_x_offset = float(
+            self.declare_parameter('pick_x_offset', 0.0).value
+        )
+        self.pick_y_offset = float(
+            self.declare_parameter('pick_y_offset', 0.0).value
+        )
+        self.add_on_set_parameters_callback(self._on_parameter_update)
         self.ur7e_utils_commands = {
             'reset_state': [
                 ['ros2', 'run', 'ur7e_utils', 'reset_state'],
@@ -68,7 +88,6 @@ class UR7e_CubeGrasp(Node):
             ]
         }
 
-        # ✅ NEW: marker publisher
         self.target_marker_pub = self.create_publisher(
             Marker,
             '/place_target_marker',
@@ -107,6 +126,33 @@ class UR7e_CubeGrasp(Node):
     def joint_state_callback(self, msg: JointState):
         self.joint_state = msg
 
+    def _on_parameter_update(self, params):
+        for param in params:
+            if param.name == 'approach_offset':
+                self.approach_offset = float(param.value)
+            elif param.name == 'grasp_offset':
+                self.grasp_offset = float(param.value)
+            elif param.name == 'place_down_adjustment':
+                self.place_down_adjustment = float(param.value)
+            elif param.name == 'place_x_offset':
+                self.place_x_offset = float(param.value)
+            elif param.name == 'place_y_offset':
+                self.place_y_offset = float(param.value)
+            elif param.name == 'pick_x_offset':
+                self.pick_x_offset = float(param.value)
+            elif param.name == 'pick_y_offset':
+                self.pick_y_offset = float(param.value)
+
+        self.get_logger().info(
+            "Updated calibration: "
+            f"pick_xy=({self.pick_x_offset:.4f},{self.pick_y_offset:.4f}), "
+            f"place_xy=({self.place_x_offset:.4f},{self.place_y_offset:.4f}), "
+            f"approach={self.approach_offset:.4f}, "
+            f"grasp={self.grasp_offset:.4f}, "
+            f"place_down={self.place_down_adjustment:.4f}"
+        )
+        return SetParametersResult(successful=True)
+
     def cube_callback(self, cube_pose):
         if self.cube_pose is not None:
             return
@@ -144,8 +190,8 @@ class UR7e_CubeGrasp(Node):
         # --- PRE-GRASP ---
         pre_grasp_joints = self.ik_planner.compute_ik(
             self.joint_state,
-            cube_pose.pose.position.x,
-            cube_pose.pose.position.y,
+            cube_pose.pose.position.x + self.pick_x_offset,
+            cube_pose.pose.position.y + self.pick_y_offset,
             cube_pose.pose.position.z + self.approach_offset,
             qx=float(q_final[0]),
             qy=float(q_final[1]),
@@ -159,8 +205,8 @@ class UR7e_CubeGrasp(Node):
         # --- GRASP ---
         grasp_joints = self.ik_planner.compute_ik(
             self.joint_state,
-            cube_pose.pose.position.x,
-            cube_pose.pose.position.y,
+            cube_pose.pose.position.x + self.pick_x_offset,
+            cube_pose.pose.position.y + self.pick_y_offset,
             cube_pose.pose.position.z + self.grasp_offset,
             qx=float(q_final[0]),
             qy=float(q_final[1]),
@@ -176,8 +222,8 @@ class UR7e_CubeGrasp(Node):
         if pre_grasp_joints:
             self.job_queue.append(pre_grasp_joints)
 
-        board_x = self.board_pose.pose.position.x
-        board_y = self.board_pose.pose.position.y
+        board_x = self.board_pose.pose.position.x + self.place_x_offset
+        board_y = self.board_pose.pose.position.y + self.place_y_offset
         board_z = self.board_pose.pose.position.z
         place_hover_z = board_z + self.approach_offset
         place_z = board_z + self.grasp_offset - self.place_down_adjustment
@@ -187,7 +233,6 @@ class UR7e_CubeGrasp(Node):
             f"z={place_z:.3f}, yaw={board_yaw:.3f}"
         )
 
-        # ✅ VISUALIZE TARGET
         self.publish_place_marker(board_x, board_y, place_z)
 
         place_hover_joints = self.ik_planner.compute_ik(
