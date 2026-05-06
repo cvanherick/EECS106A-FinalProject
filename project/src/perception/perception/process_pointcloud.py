@@ -22,11 +22,11 @@ class RealSensePCSubscriber(Node):
 
         self.cluster_dist_thresh = 0.003
         self.cluster_min_pts = 50
-        self.block_unit = 0.03175
+        self.block_unit = 0.031
 
         # NOTE: If the robot is overshooting, measure the physical
         # distance between two peg centers and update this number!
-        self.CELL_SIZE = 0.03175
+        self.CELL_SIZE = 0.031
 
         self.board_rows = max(
             1,
