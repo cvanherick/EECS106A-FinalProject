@@ -38,8 +38,14 @@ class UR7e_CubeGrasp(Node):
         )
 
         self.gripper_cli = self.create_client(Trigger, '/toggle_gripper')
+        self.start_move_srv = self.create_service(
+            Trigger,
+            '/start_robot_move',
+            self.start_robot_move_callback
+        )
 
         self.cube_pose = None
+        self.latest_cube_pose = None
         self.current_plan = None
         self.joint_state = None
 
@@ -75,6 +81,9 @@ class UR7e_CubeGrasp(Node):
         )
         self.pick_y_offset = float(
             self.declare_parameter('pick_y_offset', 0.0).value
+        )
+        self.auto_start = bool(
+            self.declare_parameter('auto_start', False).value
         )
         self.add_on_set_parameters_callback(self._on_parameter_update)
         self.ur7e_utils_commands = {
@@ -142,6 +151,8 @@ class UR7e_CubeGrasp(Node):
                 self.pick_x_offset = float(param.value)
             elif param.name == 'pick_y_offset':
                 self.pick_y_offset = float(param.value)
+            elif param.name == 'auto_start':
+                self.auto_start = bool(param.value)
 
         self.get_logger().info(
             "Updated calibration: "
@@ -153,15 +164,42 @@ class UR7e_CubeGrasp(Node):
         )
         return SetParametersResult(successful=True)
 
-    def cube_callback(self, cube_pose):
+    def start_robot_move_callback(self, request, response):
+        if self.latest_cube_pose is None:
+            response.success = False
+            response.message = 'No red block pose available yet'
+            return response
+
         if self.cube_pose is not None:
+            response.success = False
+            response.message = 'Robot move already in progress'
+            return response
+
+        self.get_logger().info('Starting robot move from game_manager')
+        started = self.start_pick_place(self.latest_cube_pose)
+        response.success = bool(started)
+        response.message = (
+            'Robot move started' if started else 'Robot move failed to start'
+        )
+        return response
+
+    def cube_callback(self, cube_pose):
+        self.latest_cube_pose = cube_pose
+
+        if not self.auto_start:
             return
+
+        self.start_pick_place(cube_pose)
+
+    def start_pick_place(self, cube_pose):
+        if self.cube_pose is not None:
+            return False
 
         self.rotation_applied = False
 
         if self.joint_state is None:
             self.get_logger().info("No joint state yet, cannot proceed")
-            return
+            return False
 
         # Wait until perception has published the four-corner board target.
         # Do this before latching cube_pose so a later cube message can retry.
@@ -170,7 +208,7 @@ class UR7e_CubeGrasp(Node):
                 "No board pose yet, waiting for /board_test_pose",
                 throttle_duration_sec=2.0
             )
-            return
+            return False
 
         self.cube_pose = cube_pose
         q = cube_pose.pose.orientation
@@ -221,7 +259,7 @@ class UR7e_CubeGrasp(Node):
             self.get_logger().error("Pick IK failed, aborting before gripper")
             self.job_queue = []
             self.cube_pose = None
-            return
+            return False
 
         self.job_queue.append('toggle_grip')
 
@@ -274,9 +312,11 @@ class UR7e_CubeGrasp(Node):
         else:
             self.get_logger().error("Place IK failed")
             self.job_queue = []
-            return
+            self.cube_pose = None
+            return False
 
         self.execute_jobs()
+        return True
 
     def execute_jobs(self):
         if not self.job_queue:

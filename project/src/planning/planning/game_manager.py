@@ -3,6 +3,7 @@ from pathlib import Path
 
 import rclpy
 from rclpy.node import Node
+from std_srvs.srv import Trigger
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from ament_index_python.packages import get_package_share_directory
@@ -49,6 +50,10 @@ class GameManager(Node):
             'process_node',
             '/process_pointcloud'
         ).value
+        self.start_service = self.declare_parameter(
+            'start_service',
+            '/start_robot_move'
+        ).value
 
         self.engine = game_logic.BlokusEngine(
             rows=self.board_rows,
@@ -61,6 +66,10 @@ class GameManager(Node):
         self.param_client = self.create_client(
             SetParameters,
             f'{self.process_node}/set_parameters'
+        )
+        self.start_client = self.create_client(
+            Trigger,
+            self.start_service
         )
 
         self.get_logger().info(
@@ -188,9 +197,31 @@ class GameManager(Node):
                 f"Stage one red {move['name']} block in the pickup area."
             )
             input('Press Enter to start the robot move...')
-            return True
+            return self.start_robot_move()
 
         self.get_logger().error('Perception rejected target parameters')
+        return False
+
+    def start_robot_move(self):
+        if not self.start_client.wait_for_service(timeout_sec=3.0):
+            self.get_logger().error(
+                f'Start service not available: {self.start_service}'
+            )
+            return False
+
+        future = self.start_client.call_async(Trigger.Request())
+        rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)
+
+        result = future.result()
+        if result is None:
+            self.get_logger().error('Robot move start call timed out')
+            return False
+
+        if result.success:
+            self.get_logger().info(result.message)
+            return True
+
+        self.get_logger().error(result.message)
         return False
 
     def make_float_param(self, name, value):
