@@ -1,5 +1,6 @@
 from std_srvs.srv import Trigger
 import sys
+import subprocess
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -53,6 +54,19 @@ class UR7e_CubeGrasp(Node):
         self.ik_planner = IKPlanner()
 
         self.job_queue = []
+        self.approach_offset = 0.185
+        self.grasp_offset = 0.14
+        self.place_down_adjustment = 0.01
+        self.ur7e_utils_commands = {
+            'reset_state': [
+                ['ros2', 'run', 'ur7e_utils', 'reset_state'],
+                ['reset_state']
+            ],
+            'tuck': [
+                ['ros2', 'run', 'ur7e_utils', 'tuck'],
+                ['tuck']
+            ]
+        }
 
         # ✅ NEW: marker publisher
         self.target_marker_pub = self.create_publisher(
@@ -103,6 +117,15 @@ class UR7e_CubeGrasp(Node):
             self.get_logger().info("No joint state yet, cannot proceed")
             return
 
+        # Wait until perception has published the four-corner board target.
+        # Do this before latching cube_pose so a later cube message can retry.
+        if self.board_pose is None:
+            self.get_logger().info(
+                "No board pose yet, waiting for /board_test_pose",
+                throttle_duration_sec=2.0
+            )
+            return
+
         self.cube_pose = cube_pose
         q = cube_pose.pose.orientation
 
@@ -112,12 +135,18 @@ class UR7e_CubeGrasp(Node):
         q_final_rot = R.from_euler('ZYX', [perpendicular_yaw, np.pi, 0.0])
         q_final = q_final_rot.as_quat()
 
+        board_q = self.board_pose.pose.orientation
+        board_yaw = 2.0 * np.arctan2(board_q.z, board_q.w)
+        board_place_yaw = board_yaw
+        q_place_rot = R.from_euler('ZYX', [board_place_yaw, np.pi, 0.0])
+        q_place = q_place_rot.as_quat()
+
         # --- PRE-GRASP ---
         pre_grasp_joints = self.ik_planner.compute_ik(
             self.joint_state,
             cube_pose.pose.position.x,
             cube_pose.pose.position.y,
-            cube_pose.pose.position.z + 0.185,
+            cube_pose.pose.position.z + self.approach_offset,
             qx=float(q_final[0]),
             qy=float(q_final[1]),
             qz=float(q_final[2]),
@@ -132,7 +161,7 @@ class UR7e_CubeGrasp(Node):
             self.joint_state,
             cube_pose.pose.position.x,
             cube_pose.pose.position.y,
-            cube_pose.pose.position.z + 0.14,
+            cube_pose.pose.position.z + self.grasp_offset,
             qx=float(q_final[0]),
             qy=float(q_final[1]),
             qz=float(q_final[2]),
@@ -147,38 +176,54 @@ class UR7e_CubeGrasp(Node):
         if pre_grasp_joints:
             self.job_queue.append(pre_grasp_joints)
 
-        # --- PLACE ---
-        if self.board_pose is None:
-            self.get_logger().error("No board pose yet, cannot move to board")
-            return
-
         board_x = self.board_pose.pose.position.x
         board_y = self.board_pose.pose.position.y
-        board_z = self.board_pose.pose.position.z + 0.35
+        board_z = self.board_pose.pose.position.z
+        place_hover_z = board_z + self.approach_offset
+        place_z = board_z + self.grasp_offset - self.place_down_adjustment
 
         self.get_logger().info(
-            f"Board hover target: x={board_x:.3f}, y={board_y:.3f}, z={board_z:.3f}"
+            f"Board divot target: x={board_x:.3f}, y={board_y:.3f}, "
+            f"z={place_z:.3f}, yaw={board_yaw:.3f}"
         )
 
         # ✅ VISUALIZE TARGET
-        self.publish_place_marker(board_x, board_y, board_z)
+        self.publish_place_marker(board_x, board_y, place_z)
 
-        release_joints = self.ik_planner.compute_ik(
+        place_hover_joints = self.ik_planner.compute_ik(
             self.joint_state,
             board_x,
             board_y,
-            board_z,
-            qx=float(q_final[0]),
-            qy=float(q_final[1]),
-            qz=float(q_final[2]),
-            qw=float(q_final[3])
+            place_hover_z,
+            qx=float(q_place[0]),
+            qy=float(q_place[1]),
+            qz=float(q_place[2]),
+            qw=float(q_place[3])
         )
 
-        if release_joints:
-            self.get_logger().info("Board hover IK succeeded, adding release move")
-            self.job_queue.append(release_joints)
+        place_joints = self.ik_planner.compute_ik(
+            self.joint_state,
+            board_x,
+            board_y,
+            place_z,
+            qx=float(q_place[0]),
+            qy=float(q_place[1]),
+            qz=float(q_place[2]),
+            qw=float(q_place[3])
+        )
+
+        if place_hover_joints and place_joints:
+            self.get_logger().info("Place IK succeeded, adding place sequence")
+            self.job_queue.append(place_hover_joints)
+            self.job_queue.append(place_joints)
+            self.job_queue.append('toggle_grip')
+            self.job_queue.append(place_hover_joints)
+            self.job_queue.append('reset_state')
+            self.job_queue.append('tuck')
         else:
-            self.get_logger().error("Board hover IK failed")
+            self.get_logger().error("Place IK failed")
+            self.job_queue = []
+            return
 
         self.execute_jobs()
 
@@ -205,6 +250,9 @@ class UR7e_CubeGrasp(Node):
             self.get_logger().info("Toggling gripper")
             self._toggle_gripper()
 
+        elif next_job in ('reset_state', 'tuck'):
+            self._run_command(next_job)
+
         else:
             self.get_logger().error("Unknown job type.")
             self.execute_jobs()
@@ -220,6 +268,37 @@ class UR7e_CubeGrasp(Node):
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
 
         self.get_logger().info('Gripper toggled.')
+        self.execute_jobs()
+
+    def _run_command(self, command):
+        candidate_cmds = self.ur7e_utils_commands.get(command, [[command]])
+
+        for cmd in candidate_cmds:
+            self.get_logger().info(f"Running {' '.join(cmd)}")
+
+            try:
+                result = subprocess.run(
+                    cmd,
+                    check=False,
+                    timeout=30.0
+                )
+            except FileNotFoundError:
+                self.get_logger().warn(f"{cmd[0]} not found")
+                continue
+            except subprocess.TimeoutExpired:
+                self.get_logger().warn(f"{' '.join(cmd)} timed out")
+                continue
+
+            if result.returncode == 0:
+                self.get_logger().info(f"{' '.join(cmd)} complete")
+                self.execute_jobs()
+                return
+
+            self.get_logger().warn(
+                f"{' '.join(cmd)} failed with return code {result.returncode}"
+            )
+
+        self.get_logger().error(f"All {command} command attempts failed")
         self.execute_jobs()
 
     def _execute_joint_trajectory(self, joint_traj):

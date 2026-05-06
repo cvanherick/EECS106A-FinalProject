@@ -39,7 +39,10 @@ class RealSensePCSubscriber(Node):
             self.declare_parameter('place_y_offset', 0.0).value
         )
         self.use_measured_grid = bool(
-            self.declare_parameter('use_measured_grid', True).value
+            self.declare_parameter('use_measured_grid', False).value
+        )
+        self.use_oriented_box_center = bool(
+            self.declare_parameter('use_oriented_box_center', False).value
         )
 
         # NOTE: If the robot is overshooting, measure the physical
@@ -462,6 +465,9 @@ class RealSensePCSubscriber(Node):
 
         centroid = np.mean(clean, axis=0)
         center_xy, yaw, lengths = self.estimate_oriented_box(clean)
+        pick_xy = centroid[:2]
+        if self.use_oriented_box_center:
+            pick_xy = center_xy
 
         long_side = max(lengths)
         short_side = min(lengths)
@@ -476,8 +482,8 @@ class RealSensePCSubscriber(Node):
         pose = PoseStamped()
         pose.header = header
 
-        pose.pose.position.x = float(center_xy[0] + self.pick_x_offset)
-        pose.pose.position.y = float(center_xy[1] + self.pick_y_offset)
+        pose.pose.position.x = float(pick_xy[0] + self.pick_x_offset)
+        pose.pose.position.y = float(pick_xy[1] + self.pick_y_offset)
         pose.pose.position.z = float(centroid[2] + self.block_pick_z_offset)
 
         half = yaw / 2.0
@@ -485,6 +491,15 @@ class RealSensePCSubscriber(Node):
         pose.pose.orientation.w = float(np.cos(half))
 
         self.pose_pub.publish(pose)
+        self.get_logger().info(
+            "Published pick pose: "
+            f"x={pose.pose.position.x:.3f}, "
+            f"y={pose.pose.position.y:.3f}, "
+            f"z={pose.pose.position.z:.3f}; "
+            f"centroid=({centroid[0]:.3f},{centroid[1]:.3f}), "
+            f"box=({center_xy[0]:.3f},{center_xy[1]:.3f})",
+            throttle_duration_sec=1.0
+        )
 
         msg = String()
         msg.data = (
@@ -515,6 +530,8 @@ class RealSensePCSubscriber(Node):
                 self.place_y_offset = float(param.value)
             elif param.name == 'use_measured_grid':
                 self.use_measured_grid = bool(param.value)
+            elif param.name == 'use_oriented_box_center':
+                self.use_oriented_box_center = bool(param.value)
 
         self.get_logger().info(
             f"Place divot set to ({self.place_row:.2f},{self.place_col:.2f})",

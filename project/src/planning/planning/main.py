@@ -217,6 +217,12 @@ class UR7e_CubeGrasp(Node):
         if grasp_joints:
             self.job_queue.append(grasp_joints)
 
+        if not pre_grasp_joints or not grasp_joints:
+            self.get_logger().error("Pick IK failed, aborting before gripper")
+            self.job_queue = []
+            self.cube_pose = None
+            return
+
         self.job_queue.append('toggle_grip')
 
         if pre_grasp_joints:
