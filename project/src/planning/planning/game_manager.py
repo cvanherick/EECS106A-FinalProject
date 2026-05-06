@@ -187,6 +187,7 @@ class GameManager(Node):
             self.get_logger().info(
                 f"Stage one red {move['name']} block in the pickup area."
             )
+            input('Press Enter to start the robot move...')
             return True
 
         self.get_logger().error('Perception rejected target parameters')
