@@ -11,7 +11,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (('share/' + package_name + '/launch'), glob('launch/*.launch.py'))
+        (('share/' + package_name + '/launch'), glob('launch/*.launch.py')),
+        ('share/' + package_name + '/logic', ['../logic/game_logic.py'])
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -23,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'main = planning.main:main',
+            'game_manager = planning.game_manager:main',
             'tf = planning.static_tf_transform:main',
             'ik = planning.ik:main',
             'transform_cube_pose = planning.transform_cube_pose:main',
