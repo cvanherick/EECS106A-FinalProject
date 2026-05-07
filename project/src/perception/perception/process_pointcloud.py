@@ -327,8 +327,10 @@ class RealSensePCSubscriber(Node):
             (self.corner_span_rows, self.corner_span_cols)
         ]
         for r, c in debug_cells:
-            wx, wy, _ = self.board_to_world(r, c)
-            self.get_logger().info(f"({r},{c}) maps to: ({wx:.3f}, {wy:.3f})")
+            wx, wy, _ = self.physical_board_to_world(r, c)
+            self.get_logger().info(
+                f"physical ({r},{c}) maps to: ({wx:.3f}, {wy:.3f})"
+            )
 
         return True
 
@@ -348,14 +350,17 @@ class RealSensePCSubscriber(Node):
         physical_row = row + self.playable_row_offset
         physical_col = col + self.playable_col_offset
 
+        return self.physical_board_to_world(physical_row, physical_col)
+
+    def physical_board_to_world(self, row, col):
         xy = (
             self.board_origin
-            + physical_row * self.row_step * self.row_dir
-            + physical_col * self.col_step * self.col_dir
+            + row * self.row_step * self.row_dir
+            + col * self.col_step * self.col_dir
         )
         xy = xy + np.array([self.place_x_offset, self.place_y_offset])
-
         return float(xy[0]), float(xy[1]), float(self.board_z)
+
 
     def estimate_oriented_box(self, pts):
         xy = pts[:, :2]
