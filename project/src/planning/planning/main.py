@@ -25,7 +25,7 @@ class UR7e_CubeGrasp(Node):
         self.rotation_applied = False
 
         self.cube_pub = self.create_subscription(
-            PoseStamped, '/cube_pose_red', self.cube_callback, 1
+            PoseStamped, '/cube_pose_blue', self.cube_callback, 1
         )
         self.joint_state_sub = self.create_subscription(
             JointState, '/joint_states', self.joint_state_callback, 1

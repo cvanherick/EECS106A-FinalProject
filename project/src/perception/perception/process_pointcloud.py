@@ -172,7 +172,7 @@ class RealSensePCSubscriber(Node):
 
         self.pose_pub = self.create_publisher(
             PoseStamped,
-            '/cube_pose_red',
+            '/cube_pose_blue',
             10
         )
         self.block_info_pub = self.create_publisher(
@@ -198,7 +198,10 @@ class RealSensePCSubscriber(Node):
 
         self.add_on_set_parameters_callback(self._on_parameter_update)
 
-        self.get_logger().info("Red block marker clustering initialized.")
+        self.get_logger().info(
+            "Color clustering initialized: red=board markers, "
+            "blue=robot pickup blocks."
+        )
         self.get_logger().info(
             f"Listening for point cloud on {self.pointcloud_topic}; "
             f"target frame is {self.target_frame}"
@@ -916,7 +919,7 @@ class RealSensePCSubscriber(Node):
 
         shape = f"{n_long}x{n_short}"
 
-        self.get_logger().info(f"Block detected: {shape}")
+        self.get_logger().info(f"Blue robot block detected: {shape}")
 
         pose = PoseStamped()
         pose.header = header
@@ -931,7 +934,7 @@ class RealSensePCSubscriber(Node):
 
         self.pose_pub.publish(pose)
         self.get_logger().info(
-            "Published pick pose: "
+            "Published blue pick pose: "
             f"x={pose.pose.position.x:.3f}, "
             f"y={pose.pose.position.y:.3f}, "
             f"z={pose.pose.position.z:.3f}; "
@@ -942,7 +945,7 @@ class RealSensePCSubscriber(Node):
 
         msg = String()
         msg.data = (
-            f"{shape}|x:{pose.pose.position.x:.3f},"
+            f"blue:{shape}|x:{pose.pose.position.x:.3f},"
             f"y:{pose.pose.position.y:.3f},z:{pose.pose.position.z:.3f}"
         )
         self.block_info_pub.publish(msg)
