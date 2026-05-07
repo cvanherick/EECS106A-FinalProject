@@ -355,6 +355,8 @@ class UR7e_CubeGrasp(Node):
 
             if traj is None:
                 self.get_logger().error("Failed to plan to position")
+                self.job_queue = []
+                self.cube_pose = None
                 return
 
             self.get_logger().info("Planned to position")
@@ -374,14 +376,29 @@ class UR7e_CubeGrasp(Node):
     def _toggle_gripper(self):
         if not self.gripper_cli.wait_for_service(timeout_sec=5.0):
             self.get_logger().error('Gripper service not available')
-            rclpy.shutdown()
+            self.job_queue = []
+            self.cube_pose = None
             return
 
         req = Trigger.Request()
         future = self.gripper_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+        future.add_done_callback(self._on_gripper_done)
 
-        self.get_logger().info('Gripper toggled.')
+    def _on_gripper_done(self, future):
+        result = future.result()
+        if result is None:
+            self.get_logger().error('Gripper service call failed')
+            self.job_queue = []
+            self.cube_pose = None
+            return
+
+        if not result.success:
+            self.get_logger().error(f'Gripper service failed: {result.message}')
+            self.job_queue = []
+            self.cube_pose = None
+            return
+
+        self.get_logger().info(f'Gripper toggled: {result.message}')
         self.execute_jobs()
 
     def _run_command(self, command):
@@ -431,7 +448,8 @@ class UR7e_CubeGrasp(Node):
 
         if not goal_handle.accepted:
             self.get_logger().error('Trajectory rejected')
-            rclpy.shutdown()
+            self.job_queue = []
+            self.cube_pose = None
             return
 
         self.get_logger().info('Executing...')
@@ -445,6 +463,8 @@ class UR7e_CubeGrasp(Node):
             self.execute_jobs()
         except Exception as e:
             self.get_logger().error(f'Execution failed: {e}')
+            self.job_queue = []
+            self.cube_pose = None
 
 
 def main(args=None):
