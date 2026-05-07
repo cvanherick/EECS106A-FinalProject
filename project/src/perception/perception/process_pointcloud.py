@@ -93,7 +93,7 @@ class RealSensePCSubscriber(Node):
             self.declare_parameter('invert_playable_rows', False).value
         )
         self.invert_playable_cols = bool(
-            self.declare_parameter('invert_playable_cols', False).value
+            self.declare_parameter('invert_playable_cols', True).value
         )
 
         self.board_origin = None

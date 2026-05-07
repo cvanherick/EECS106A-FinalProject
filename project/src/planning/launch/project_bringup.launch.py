@@ -47,6 +47,7 @@ def generate_launch_description():
             'playable_col_offset': 1,
             'playable_rows': 8,
             'playable_cols': 10,
+            'invert_playable_cols': True,
         }]
     )
 
