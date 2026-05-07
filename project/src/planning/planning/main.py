@@ -76,12 +76,6 @@ class UR7e_CubeGrasp(Node):
         self.place_y_offset = float(
             self.declare_parameter('place_y_offset', 0.0).value
         )
-        self.pick_x_offset = float(
-            self.declare_parameter('pick_x_offset', 0.0).value
-        )
-        self.pick_y_offset = float(
-            self.declare_parameter('pick_y_offset', 0.0).value
-        )
         self.auto_start = bool(
             self.declare_parameter('auto_start', False).value
         )
@@ -147,16 +141,11 @@ class UR7e_CubeGrasp(Node):
                 self.place_x_offset = float(param.value)
             elif param.name == 'place_y_offset':
                 self.place_y_offset = float(param.value)
-            elif param.name == 'pick_x_offset':
-                self.pick_x_offset = float(param.value)
-            elif param.name == 'pick_y_offset':
-                self.pick_y_offset = float(param.value)
             elif param.name == 'auto_start':
                 self.auto_start = bool(param.value)
 
         self.get_logger().info(
             "Updated calibration: "
-            f"pick_xy=({self.pick_x_offset:.4f},{self.pick_y_offset:.4f}), "
             f"place_xy=({self.place_x_offset:.4f},{self.place_y_offset:.4f}), "
             f"approach={self.approach_offset:.4f}, "
             f"grasp={self.grasp_offset:.4f}, "
@@ -225,46 +214,48 @@ class UR7e_CubeGrasp(Node):
         q_place_rot = R.from_euler('ZYX', [board_place_yaw, np.pi, 0.0])
         q_place = q_place_rot.as_quat()
 
+        pick_x = cube_pose.pose.position.x
+        pick_y = cube_pose.pose.position.y
+        pick_z = cube_pose.pose.position.z
+
         # --- PRE-GRASP ---
+        # Seed from current robot state.
         pre_grasp_joints = self.ik_planner.compute_ik(
             self.joint_state,
-            cube_pose.pose.position.x + self.pick_x_offset,
-            cube_pose.pose.position.y + self.pick_y_offset,
-            cube_pose.pose.position.z + self.approach_offset,
+            pick_x,
+            pick_y,
+            pick_z + self.approach_offset,
             qx=float(q_final[0]),
             qy=float(q_final[1]),
             qz=float(q_final[2]),
             qw=float(q_final[3])
         )
-
-        if pre_grasp_joints:
-            self.job_queue.append(pre_grasp_joints)
-
-        # --- GRASP ---
-        grasp_joints = self.ik_planner.compute_ik(
-            self.joint_state,
-            cube_pose.pose.position.x + self.pick_x_offset,
-            cube_pose.pose.position.y + self.pick_y_offset,
-            cube_pose.pose.position.z + self.grasp_offset,
-            qx=float(q_final[0]),
-            qy=float(q_final[1]),
-            qz=float(q_final[2]),
-            qw=float(q_final[3])
-        )
-
-        if grasp_joints:
-            self.job_queue.append(grasp_joints)
-
-        if not pre_grasp_joints or not grasp_joints:
-            self.get_logger().error("Pick IK failed, aborting before gripper")
-            self.job_queue = []
+        if not pre_grasp_joints:
+            self.get_logger().error("Pre-grasp IK failed, aborting")
             self.cube_pose = None
             return False
 
-        self.job_queue.append('toggle_grip')
+        # --- GRASP ---
+        # Seed from pre_grasp: the robot will be at that config when it descends.
+        grasp_joints = self.ik_planner.compute_ik(
+            pre_grasp_joints,
+            pick_x,
+            pick_y,
+            pick_z + self.grasp_offset,
+            qx=float(q_final[0]),
+            qy=float(q_final[1]),
+            qz=float(q_final[2]),
+            qw=float(q_final[3])
+        )
+        if not grasp_joints:
+            self.get_logger().error("Grasp IK failed, aborting")
+            self.cube_pose = None
+            return False
 
-        if pre_grasp_joints:
-            self.job_queue.append(pre_grasp_joints)
+        self.job_queue.append(pre_grasp_joints)
+        self.job_queue.append(grasp_joints)
+        self.job_queue.append('toggle_grip')
+        self.job_queue.append(pre_grasp_joints)
 
         board_x = self.board_pose.pose.position.x + self.place_x_offset
         board_y = self.board_pose.pose.position.y + self.place_y_offset
@@ -279,8 +270,10 @@ class UR7e_CubeGrasp(Node):
 
         self.publish_place_marker(board_x, board_y, place_z)
 
+        # --- PLACE HOVER ---
+        # Seed from pre_grasp: the robot returns there after lifting off the block.
         place_hover_joints = self.ik_planner.compute_ik(
-            self.joint_state,
+            pre_grasp_joints,
             board_x,
             board_y,
             place_hover_z,
@@ -289,9 +282,16 @@ class UR7e_CubeGrasp(Node):
             qz=float(q_place[2]),
             qw=float(q_place[3])
         )
+        if not place_hover_joints:
+            self.get_logger().error("Place hover IK failed, aborting")
+            self.job_queue = []
+            self.cube_pose = None
+            return False
 
+        # --- PLACE ---
+        # Seed from place_hover: the robot descends from that config.
         place_joints = self.ik_planner.compute_ik(
-            self.joint_state,
+            place_hover_joints,
             board_x,
             board_y,
             place_z,
@@ -300,20 +300,19 @@ class UR7e_CubeGrasp(Node):
             qz=float(q_place[2]),
             qw=float(q_place[3])
         )
-
-        if place_hover_joints and place_joints:
-            self.get_logger().info("Place IK succeeded, adding place sequence")
-            self.job_queue.append(place_hover_joints)
-            self.job_queue.append(place_joints)
-            self.job_queue.append('toggle_grip')
-            self.job_queue.append(place_hover_joints)
-            self.job_queue.append('reset_state')
-            self.job_queue.append('tuck')
-        else:
-            self.get_logger().error("Place IK failed")
+        if not place_joints:
+            self.get_logger().error("Place IK failed, aborting")
             self.job_queue = []
             self.cube_pose = None
             return False
+
+        self.get_logger().info("All IK solutions found, executing sequence")
+        self.job_queue.append(place_hover_joints)
+        self.job_queue.append(place_joints)
+        self.job_queue.append('toggle_grip')
+        self.job_queue.append(place_hover_joints)
+        self.job_queue.append('reset_state')
+        self.job_queue.append('tuck')
 
         self.execute_jobs()
         return True
