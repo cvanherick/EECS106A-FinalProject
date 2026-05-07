@@ -59,17 +59,17 @@ class RealSensePCSubscriber(Node):
 
         self.board_rows = max(
             1,
-            int(self.declare_parameter('board_rows', 12).value)
+            int(self.declare_parameter('board_rows', 10).value)
         )
         self.board_cols = max(
             1,
-            int(self.declare_parameter('board_cols', 10).value)
+            int(self.declare_parameter('board_cols', 12).value)
         )
         self.playable_row_offset = int(
-            self.declare_parameter('playable_row_offset', 2).value
+            self.declare_parameter('playable_row_offset', 1).value
         )
         self.playable_col_offset = int(
-            self.declare_parameter('playable_col_offset', 0).value
+            self.declare_parameter('playable_col_offset', 1).value
         )
         self.playable_rows = max(
             1,
@@ -139,6 +139,9 @@ class RealSensePCSubscriber(Node):
         )
         self.place_col = float(
             self.declare_parameter('place_col', default_place_col).value
+        )
+        self.robot_target_cells = self.parse_target_cells(
+            self.declare_parameter('robot_target_cells', '0,0').value
         )
 
         # Hardcoded axes. Y is flipped to 1.0 to prevent moving the wrong way.
@@ -275,14 +278,22 @@ class RealSensePCSubscriber(Node):
         if corners is None:
             self.get_logger().warn(
                 "Saw 1x1 red clusters, but none matched the expected "
-                "12x10 board corner span. Move non-corner red pieces away "
+                "10x12 board corner span. Move non-corner red pieces away "
                 "from the board markers.",
                 throttle_duration_sec=2.0
             )
             return False
 
-        row_dir = long_dir
-        col_dir = short_dir
+        if self.corner_span_rows >= self.corner_span_cols:
+            row_dir = long_dir
+            col_dir = short_dir
+            row_span = long_span
+            col_span = short_span
+        else:
+            row_dir = short_dir
+            col_dir = long_dir
+            row_span = short_span
+            col_span = long_span
 
         if np.dot(row_dir, self.row_dir) < 0.0:
             row_dir = -row_dir
@@ -293,8 +304,8 @@ class RealSensePCSubscriber(Node):
         row_step = self.CELL_SIZE
         col_step = self.CELL_SIZE
         if self.use_measured_grid:
-            row_step = long_span / float(self.corner_span_rows)
-            col_step = short_span / float(self.corner_span_cols)
+            row_step = row_span / float(self.corner_span_rows)
+            col_step = col_span / float(self.corner_span_cols)
 
         center = np.mean(corners[:, :2], axis=0)
         self.board_center = center
@@ -470,6 +481,31 @@ class RealSensePCSubscriber(Node):
         marker.color.b = rgba[2]
         marker.color.a = rgba[3]
 
+    def parse_target_cells(self, text):
+        cells = []
+        for item in str(text).split(';'):
+            item = item.strip()
+            if not item:
+                continue
+
+            parts = item.split(',')
+            if len(parts) != 2:
+                self.get_logger().warn(
+                    f"Ignoring malformed robot target cell '{item}'",
+                    throttle_duration_sec=2.0
+                )
+                continue
+
+            try:
+                cells.append((float(parts[0]), float(parts[1])))
+            except ValueError:
+                self.get_logger().warn(
+                    f"Ignoring malformed robot target cell '{item}'",
+                    throttle_duration_sec=2.0
+                )
+
+        return cells
+
     def publish_board_divot_markers(self):
         if self.board_origin is None:
             return
@@ -532,6 +568,39 @@ class RealSensePCSubscriber(Node):
             target.scale.z = 0.026
             self.set_marker_color(target, (1.0, 0.85, 0.0, 1.0))
             marker_array.markers.append(target)
+
+        for marker_id in range(10):
+            old_target = Marker()
+            old_target.header.frame_id = self.target_frame
+            old_target.header.stamp = stamp
+            old_target.ns = 'robot_piece_target'
+            old_target.id = marker_id
+            old_target.action = Marker.DELETE
+            marker_array.markers.append(old_target)
+
+        for marker_id, (row, col) in enumerate(self.robot_target_cells[:10]):
+            if not self.is_valid_divot(row, col):
+                continue
+
+            physical_row, physical_col = self.game_to_physical_cell(row, col)
+            piece_marker = Marker()
+            piece_marker.header.frame_id = self.target_frame
+            piece_marker.header.stamp = stamp
+            piece_marker.ns = 'robot_piece_target'
+            piece_marker.id = marker_id
+            piece_marker.type = Marker.CUBE
+            piece_marker.action = Marker.ADD
+
+            x, y, z = self.physical_board_to_world(physical_row, physical_col)
+            piece_marker.pose.position.x = x
+            piece_marker.pose.position.y = y
+            piece_marker.pose.position.z = z + 0.030
+            piece_marker.pose.orientation.w = 1.0
+            piece_marker.scale.x = self.col_step * 0.72
+            piece_marker.scale.y = self.row_step * 0.72
+            piece_marker.scale.z = 0.010
+            self.set_marker_color(piece_marker, (1.0, 0.28, 0.05, 0.85))
+            marker_array.markers.append(piece_marker)
 
         self.board_divot_marker_pub.publish(marker_array)
 
@@ -779,9 +848,12 @@ class RealSensePCSubscriber(Node):
                 self.invert_playable_rows = bool(param.value)
             elif param.name == 'invert_playable_cols':
                 self.invert_playable_cols = bool(param.value)
+            elif param.name == 'robot_target_cells':
+                self.robot_target_cells = self.parse_target_cells(param.value)
 
         self.get_logger().info(
             f"Place divot set to ({self.place_row:.2f},{self.place_col:.2f}); "
+            f"robot_cells={self.robot_target_cells}; "
             f"invert_rows={self.invert_playable_rows}, "
             f"invert_cols={self.invert_playable_cols}",
             throttle_duration_sec=1.0

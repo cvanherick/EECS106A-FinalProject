@@ -41,10 +41,10 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'pointcloud_topic': pointcloud_topic,
-            'board_rows': 12,
-            'board_cols': 10,
-            'playable_row_offset': 2,
-            'playable_col_offset': 0,
+            'board_rows': 10,
+            'board_cols': 12,
+            'playable_row_offset': 1,
+            'playable_col_offset': 1,
             'playable_rows': 8,
             'playable_cols': 10,
         }]

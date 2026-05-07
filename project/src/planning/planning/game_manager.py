@@ -39,16 +39,16 @@ class GameManager(Node):
         super().__init__('game_manager')
 
         self.physical_board_rows = int(
-            self.declare_parameter('physical_board_rows', 12).value
+            self.declare_parameter('physical_board_rows', 10).value
         )
         self.physical_board_cols = int(
-            self.declare_parameter('physical_board_cols', 10).value
+            self.declare_parameter('physical_board_cols', 12).value
         )
         self.playable_row_offset = int(
-            self.declare_parameter('playable_row_offset', 2).value
+            self.declare_parameter('playable_row_offset', 1).value
         )
         self.playable_col_offset = int(
-            self.declare_parameter('playable_col_offset', 0).value
+            self.declare_parameter('playable_col_offset', 1).value
         )
         self.board_rows = int(
             self.declare_parameter(
@@ -326,6 +326,14 @@ class GameManager(Node):
 
     def send_robot_target(self, move):
         row, col = move['origin']
+        target_cells = [
+            (row + drow, col + dcol)
+            for drow, dcol in move['coords']
+        ]
+        target_cell_text = ';'.join(
+            f'{cell_row},{cell_col}'
+            for cell_row, cell_col in target_cells
+        )
 
         if not self.param_client.wait_for_service(timeout_sec=3.0):
             self.get_logger().error(
@@ -337,6 +345,7 @@ class GameManager(Node):
         request.parameters = [
             self.make_float_param('place_row', float(row)),
             self.make_float_param('place_col', float(col)),
+            self.make_string_param('robot_target_cells', target_cell_text),
         ]
 
         future = self.param_client.call_async(request)
@@ -349,7 +358,8 @@ class GameManager(Node):
         ok = all(result.successful for result in future.result().results)
         if ok:
             self.get_logger().info(
-                f'Sent robot target to perception: row={row}, col={col}'
+                f'Sent robot target to perception: row={row}, col={col}, '
+                f'cells={target_cell_text}'
             )
             self.get_logger().info(
                 f"Stage one red {move['name']} block in the pickup area."
@@ -391,6 +401,15 @@ class GameManager(Node):
         param.value = ParameterValue(
             type=ParameterType.PARAMETER_DOUBLE,
             double_value=value
+        )
+        return param
+
+    def make_string_param(self, name, value):
+        param = Parameter()
+        param.name = name
+        param.value = ParameterValue(
+            type=ParameterType.PARAMETER_STRING,
+            string_value=value
         )
         return param
 
