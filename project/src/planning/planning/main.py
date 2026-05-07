@@ -163,7 +163,7 @@ class UR7e_CubeGrasp(Node):
     def start_robot_move_callback(self, request, response):
         if self.latest_cube_pose is None:
             response.success = False
-            response.message = 'No red block pose available yet'
+            response.message = 'No blue robot block pose available yet'
             return response
 
         if self.cube_pose is not None:

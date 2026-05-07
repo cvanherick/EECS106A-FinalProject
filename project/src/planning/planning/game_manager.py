@@ -193,9 +193,9 @@ class GameManager(Node):
         def cell_color(row, col):
             value = self.engine.board[row, col]
             if value == self.human_player:
-                return '#9ec5fe'
-            if value == self.robot_player:
                 return '#f4a6a6'
+            if value == self.robot_player:
+                return '#9ec5fe'
             return '#ffffff'
 
         def redraw():
@@ -355,6 +355,7 @@ class GameManager(Node):
             self.make_float_param('place_row', centroid_row),
             self.make_float_param('place_col', centroid_col),
             self.make_string_param('robot_target_cells', target_cell_text),
+            self.make_string_param('expected_robot_shape', move['name']),
             self.make_bool_param('piece_yaw_along_col', piece_yaw_along_col),
             self.make_bool_param('target_is_set', True),
         ]

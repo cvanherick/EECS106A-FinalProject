@@ -146,6 +146,9 @@ class RealSensePCSubscriber(Node):
         self.robot_target_cells = self.parse_target_cells(
             self.declare_parameter('robot_target_cells', '').value
         )
+        self.expected_robot_shape = str(
+            self.declare_parameter('expected_robot_shape', '').value
+        )
         self.piece_yaw_along_col = bool(
             self.declare_parameter('piece_yaw_along_col', False).value
         )
@@ -466,6 +469,34 @@ class RealSensePCSubscriber(Node):
         xy = xy + np.array([self.place_x_offset, self.place_y_offset])
         return float(xy[0]), float(xy[1]), float(self.board_z)
 
+    def world_to_physical_board_cell(self, xy):
+        if self.board_origin is None:
+            return None
+
+        corrected_xy = (
+            np.asarray(xy, dtype=float)
+            - np.array([self.place_x_offset, self.place_y_offset])
+        )
+        delta = corrected_xy - self.board_origin
+        row = float(np.dot(delta, self.row_dir) / self.row_step)
+        col = float(np.dot(delta, self.col_dir) / self.col_step)
+        return row, col
+
+    def is_xy_on_physical_board(self, xy, margin_cells=0.75):
+        cell = self.world_to_physical_board_cell(xy)
+        if cell is None:
+            return False
+
+        row, col = cell
+        return (
+            -margin_cells
+            <= row
+            <= (self.board_rows - 1) + margin_cells
+            and -margin_cells
+            <= col
+            <= (self.board_cols - 1) + margin_cells
+        )
+
     def is_playable_physical_cell(self, row, col):
         return (
             self.playable_row_offset
@@ -512,6 +543,22 @@ class RealSensePCSubscriber(Node):
                 )
 
         return cells
+
+    def normalized_shape_key(self, shape):
+        try:
+            a, b = [int(part) for part in str(shape).lower().split('x')]
+        except ValueError:
+            return None
+
+        return tuple(sorted((a, b)))
+
+    def shape_matches_expected(self, shape):
+        if not self.expected_robot_shape:
+            return True
+
+        detected = self.normalized_shape_key(shape)
+        expected = self.normalized_shape_key(self.expected_robot_shape)
+        return detected is not None and detected == expected
 
     def publish_board_divot_markers(self):
         if self.board_origin is None:
@@ -769,21 +816,35 @@ class RealSensePCSubscriber(Node):
         g = (rgb >> 8) & 255
         b = rgb & 255
 
-        red_mask = (r > 150) & (g < 100) & (b < 100)
-        pts = xyz[red_mask]
+        red_mask = (r > 150) & (g < 110) & (b < 110)
+        blue_mask = (b > 120) & (r < 120) & (g < 170)
 
-        if len(pts) < self.cluster_min_pts:
+        red_pts = xyz[red_mask]
+        blue_pts = xyz[blue_mask]
+
+        red_clusters = []
+        blue_clusters = []
+
+        if len(red_pts) >= self.cluster_min_pts:
+            red_clusters = self.euclidean_clustering(red_pts)
+        elif self.board_origin is None:
             self.get_logger().info(
                 f"Point cloud received from {msg.header.frame_id}, but only "
-                f"{len(pts)} red points passed threshold",
+                f"{len(red_pts)} red marker points passed threshold",
                 throttle_duration_sec=2.0
             )
-            return
 
-        clusters = self.euclidean_clustering(pts)
+        if len(blue_pts) >= self.cluster_min_pts:
+            blue_clusters = self.euclidean_clustering(blue_pts)
+        elif self.board_origin is not None:
+            self.get_logger().info(
+                f"Board is calibrated, but only {len(blue_pts)} blue robot "
+                "piece points passed threshold",
+                throttle_duration_sec=2.0
+            )
 
         one_by_one_clusters = [
-            cluster for cluster in clusters
+            cluster for cluster in red_clusters
             if self.estimate_shape(cluster) == "1x1"
         ]
 
@@ -808,11 +869,24 @@ class RealSensePCSubscriber(Node):
             # for game_manager to set a real target instead of using a default.
             self.publish_board_test_pose(self.place_row, self.place_col)
 
-            for cluster in clusters:
-                shape = self.estimate_shape(cluster)
+            for cluster in blue_clusters:
+                centroid = np.mean(cluster, axis=0)
+                if self.is_xy_on_physical_board(centroid[:2]):
+                    row_col = self.world_to_physical_board_cell(centroid[:2])
+                    self.get_logger().info(
+                        "Skipping blue block already on board at physical "
+                        f"cell ({row_col[0]:.2f},{row_col[1]:.2f})",
+                        throttle_duration_sec=1.0
+                    )
+                    continue
 
-                # Do not publish the origin marker as a pickable block
-                if shape == "1x1":
+                shape = self.estimate_shape(cluster)
+                if not self.shape_matches_expected(shape):
+                    self.get_logger().info(
+                        f"Skipping blue {shape}; waiting for "
+                        f"{self.expected_robot_shape}",
+                        throttle_duration_sec=1.0
+                    )
                     continue
 
                 self.process_block(cluster, cloud.header)
@@ -908,6 +982,8 @@ class RealSensePCSubscriber(Node):
             elif param.name == 'robot_target_cells':
                 self.robot_target_cells = self.parse_target_cells(param.value)
                 self.target_is_set = True
+            elif param.name == 'expected_robot_shape':
+                self.expected_robot_shape = str(param.value)
             elif param.name == 'piece_yaw_along_col':
                 self.piece_yaw_along_col = bool(param.value)
             elif param.name == 'target_is_set':
@@ -917,6 +993,7 @@ class RealSensePCSubscriber(Node):
             f"Place divot set to ({self.place_row:.2f},{self.place_col:.2f}); "
             f"target_set={self.target_is_set}; "
             f"robot_cells={self.robot_target_cells}; "
+            f"expected_shape={self.expected_robot_shape}; "
             f"invert_rows={self.invert_playable_rows}, "
             f"invert_cols={self.invert_playable_cols}",
             throttle_duration_sec=1.0
