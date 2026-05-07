@@ -46,6 +46,7 @@ class UR7e_CubeGrasp(Node):
 
         self.cube_pose = None
         self.latest_cube_pose = None
+        self.latest_cube_pose_time = None
         self.current_plan = None
         self.joint_state = None
 
@@ -73,6 +74,9 @@ class UR7e_CubeGrasp(Node):
         )
         self.max_board_pose_age = float(
             self.declare_parameter('max_board_pose_age', 2.0).value
+        )
+        self.max_cube_pose_age = float(
+            self.declare_parameter('max_cube_pose_age', 2.0).value
         )
         requested_auto_start = bool(
             self.declare_parameter('auto_start', False).value
@@ -144,6 +148,8 @@ class UR7e_CubeGrasp(Node):
                 self.place_down_adjustment = float(param.value)
             elif param.name == 'max_board_pose_age':
                 self.max_board_pose_age = float(param.value)
+            elif param.name == 'max_cube_pose_age':
+                self.max_cube_pose_age = float(param.value)
             elif param.name == 'auto_start':
                 self.auto_start = False
                 if bool(param.value):
@@ -166,12 +172,25 @@ class UR7e_CubeGrasp(Node):
             response.message = 'No blue robot block pose available yet'
             return response
 
+        cube_pose_age = (
+            self.get_clock().now() - self.latest_cube_pose_time
+        ).nanoseconds / 1e9
+        if cube_pose_age > self.max_cube_pose_age:
+            response.success = False
+            response.message = (
+                f'Blue robot block pose is stale ({cube_pose_age:.2f}s old)'
+            )
+            return response
+
         if self.cube_pose is not None:
             response.success = False
             response.message = 'Robot move already in progress'
             return response
 
-        self.get_logger().info('Starting robot move from game_manager')
+        self.get_logger().info(
+            "Starting robot move from game_manager with fresh blue pickup "
+            f"pose ({cube_pose_age:.2f}s old)"
+        )
         started = self.start_pick_place(self.latest_cube_pose)
         response.success = bool(started)
         response.message = (
@@ -181,6 +200,7 @@ class UR7e_CubeGrasp(Node):
 
     def cube_callback(self, cube_pose):
         self.latest_cube_pose = cube_pose
+        self.latest_cube_pose_time = self.get_clock().now()
 
     def start_pick_place(self, cube_pose):
         if self.cube_pose is not None:
@@ -335,8 +355,13 @@ class UR7e_CubeGrasp(Node):
 
     def execute_jobs(self):
         if not self.job_queue:
-            self.get_logger().info("All jobs completed.")
-            rclpy.shutdown()
+            self.get_logger().info(
+                "All jobs completed. Robot move sequence is ready for the "
+                "next turn."
+            )
+            self.cube_pose = None
+            self.latest_cube_pose = None
+            self.latest_cube_pose_time = None
             return
 
         self.get_logger().info(f"Executing job queue, {len(self.job_queue)} jobs remaining.")

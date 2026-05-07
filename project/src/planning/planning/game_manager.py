@@ -324,8 +324,12 @@ class GameManager(Node):
             f"coords={move['coords']}"
         )
 
+    def base_piece_name(self, name):
+        return str(name).split('-', 1)[0]
+
     def send_robot_target(self, move):
         row, col = move['origin']
+        base_name = self.base_piece_name(move['name'])
         target_cells = [
             (row + drow, col + dcol)
             for drow, dcol in move['coords']
@@ -355,7 +359,7 @@ class GameManager(Node):
             self.make_float_param('place_row', centroid_row),
             self.make_float_param('place_col', centroid_col),
             self.make_string_param('robot_target_cells', target_cell_text),
-            self.make_string_param('expected_robot_shape', move['name']),
+            self.make_string_param('expected_robot_shape', base_name),
             self.make_bool_param('piece_yaw_along_col', piece_yaw_along_col),
             self.make_bool_param('target_is_set', True),
         ]
@@ -376,7 +380,9 @@ class GameManager(Node):
                 f'cells={target_cell_text}'
             )
             self.get_logger().info(
-                f"Stage one red {move['name']} block in the pickup area."
+                f"Stage one blue {base_name} block in the pickup area "
+                f"({move['name']}) "
+                f"for target cells {target_cell_text}."
             )
             input('Press Enter to start the robot move...')
             return self.start_robot_move()
