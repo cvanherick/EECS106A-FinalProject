@@ -44,11 +44,23 @@ class RealSensePCSubscriber(Node):
         self.place_y_offset = float(
             self.declare_parameter('place_y_offset', 0.0).value
         )
+        self.place_along_piece_offset = float(
+            self.declare_parameter('place_along_piece_offset', 0.0).value
+        )
+        self.place_across_piece_offset = float(
+            self.declare_parameter('place_across_piece_offset', 0.0).value
+        )
+        self.place_z_offset = float(
+            self.declare_parameter('place_z_offset', 0.0).value
+        )
         self.use_measured_grid = bool(
             self.declare_parameter('use_measured_grid', False).value
         )
         self.use_oriented_box_center = bool(
             self.declare_parameter('use_oriented_box_center', False).value
+        )
+        self.grid_step_warn_ratio = float(
+            self.declare_parameter('grid_step_warn_ratio', 0.15).value
         )
 
         # NOTE: If the robot is overshooting, measure the physical
@@ -93,7 +105,7 @@ class RealSensePCSubscriber(Node):
             self.declare_parameter('invert_playable_rows', False).value
         )
         self.invert_playable_cols = bool(
-            self.declare_parameter('invert_playable_cols', False).value
+            self.declare_parameter('invert_playable_cols', True).value
         )
 
         self.board_origin = None
@@ -146,6 +158,9 @@ class RealSensePCSubscriber(Node):
         self.robot_target_cells = self.parse_target_cells(
             self.declare_parameter('robot_target_cells', '').value
         )
+        self.expected_robot_shape = str(
+            self.declare_parameter('expected_robot_shape', '').value
+        )
         self.piece_yaw_along_col = bool(
             self.declare_parameter('piece_yaw_along_col', False).value
         )
@@ -169,7 +184,7 @@ class RealSensePCSubscriber(Node):
 
         self.pose_pub = self.create_publisher(
             PoseStamped,
-            '/cube_pose_red',
+            '/cube_pose_blue',
             10
         )
         self.block_info_pub = self.create_publisher(
@@ -195,7 +210,10 @@ class RealSensePCSubscriber(Node):
 
         self.add_on_set_parameters_callback(self._on_parameter_update)
 
-        self.get_logger().info("Red block marker clustering initialized.")
+        self.get_logger().info(
+            "Color clustering initialized: red=board markers, "
+            "blue=robot pickup blocks."
+        )
         self.get_logger().info(
             f"Listening for point cloud on {self.pointcloud_topic}; "
             f"target frame is {self.target_frame}"
@@ -209,6 +227,10 @@ class RealSensePCSubscriber(Node):
             "red 1x1 corner blocks are calibration markers; "
             f"target_set={self.target_is_set}, "
             f"place=({self.place_row:.1f},{self.place_col:.1f}), "
+            "piece_frame_offsets="
+            f"({self.place_along_piece_offset:.4f},"
+            f"{self.place_across_piece_offset:.4f},"
+            f"{self.place_z_offset:.4f}), "
             f"cell={self.CELL_SIZE:.5f} m"
         )
         self.get_logger().info(
@@ -302,17 +324,34 @@ class RealSensePCSubscriber(Node):
             row_span = short_span
             col_span = long_span
 
-        if np.dot(row_dir, self.row_dir) < 0.0:
-            row_dir = -row_dir
+        # if np.dot(row_dir, self.row_dir) < 0.0:
+            # row_dir = -row_dir
 
-        if np.dot(col_dir, self.col_dir) < 0.0:
-            col_dir = -col_dir
+        # if np.dot(col_dir, self.col_dir) < 0.0:
+            # col_dir = -col_dir
+
+        measured_row_step = row_span / float(self.corner_span_rows)
+        measured_col_step = col_span / float(self.corner_span_cols)
+
+        for axis_name, measured_step in (
+            ('row', measured_row_step),
+            ('col', measured_col_step)
+        ):
+            relative_error = abs(measured_step - self.CELL_SIZE) / self.CELL_SIZE
+            if relative_error > self.grid_step_warn_ratio:
+                self.get_logger().warn(
+                    f"Measured {axis_name} cell size {measured_step:.5f} m "
+                    f"differs from nominal {self.CELL_SIZE:.5f} m by "
+                    f"{relative_error * 100.0:.1f}%. Board calibration may "
+                    "be inaccurate.",
+                    throttle_duration_sec=2.0
+                )
 
         row_step = self.CELL_SIZE
         col_step = self.CELL_SIZE
         if self.use_measured_grid:
-            row_step = row_span / float(self.corner_span_rows)
-            col_step = col_span / float(self.corner_span_cols)
+            row_step = measured_row_step
+            col_step = measured_col_step
 
         center = np.mean(corners[:, :2], axis=0)
         self.board_center = center
@@ -466,6 +505,34 @@ class RealSensePCSubscriber(Node):
         xy = xy + np.array([self.place_x_offset, self.place_y_offset])
         return float(xy[0]), float(xy[1]), float(self.board_z)
 
+    def world_to_physical_board_cell(self, xy):
+        if self.board_origin is None:
+            return None
+
+        corrected_xy = (
+            np.asarray(xy, dtype=float)
+            - np.array([self.place_x_offset, self.place_y_offset])
+        )
+        delta = corrected_xy - self.board_origin
+        row = float(np.dot(delta, self.row_dir) / self.row_step)
+        col = float(np.dot(delta, self.col_dir) / self.col_step)
+        return row, col
+
+    def is_xy_on_physical_board(self, xy, margin_cells=0.75):
+        cell = self.world_to_physical_board_cell(xy)
+        if cell is None:
+            return False
+
+        row, col = cell
+        return (
+            -margin_cells
+            <= row
+            <= (self.board_rows - 1) + margin_cells
+            and -margin_cells
+            <= col
+            <= (self.board_cols - 1) + margin_cells
+        )
+
     def is_playable_physical_cell(self, row, col):
         return (
             self.playable_row_offset
@@ -512,6 +579,22 @@ class RealSensePCSubscriber(Node):
                 )
 
         return cells
+
+    def normalized_shape_key(self, shape):
+        try:
+            a, b = [int(part) for part in str(shape).lower().split('x')]
+        except ValueError:
+            return None
+
+        return tuple(sorted((a, b)))
+
+    def shape_matches_expected(self, shape):
+        if not self.expected_robot_shape:
+            return True
+
+        detected = self.normalized_shape_key(shape)
+        expected = self.normalized_shape_key(self.expected_robot_shape)
+        return detected is not None and detected == expected
 
     def publish_board_divot_markers(self):
         if self.board_origin is None:
@@ -576,6 +659,48 @@ class RealSensePCSubscriber(Node):
             self.set_marker_color(target, (1.0, 0.85, 0.0, 1.0))
             marker_array.markers.append(target)
 
+            old_adjusted = Marker()
+            old_adjusted.header.frame_id = self.target_frame
+            old_adjusted.header.stamp = stamp
+            old_adjusted.ns = 'place_adjusted_target'
+            old_adjusted.id = 0
+            old_adjusted.action = Marker.DELETE
+            marker_array.markers.append(old_adjusted)
+
+            has_piece_frame_offset = any(
+                abs(value) > 1e-6
+                for value in (
+                    self.place_along_piece_offset,
+                    self.place_across_piece_offset,
+                    self.place_z_offset
+                )
+            )
+            if has_piece_frame_offset:
+                adjusted = Marker()
+                adjusted.header.frame_id = self.target_frame
+                adjusted.header.stamp = stamp
+                adjusted.ns = 'place_adjusted_target'
+                adjusted.id = 0
+                adjusted.type = Marker.SPHERE
+                adjusted.action = Marker.ADD
+
+                long_axis = self.get_piece_long_axis()
+                ax, ay, az = self.apply_piece_frame_place_offsets(
+                    x,
+                    y,
+                    z,
+                    long_axis
+                )
+                adjusted.pose.position.x = ax
+                adjusted.pose.position.y = ay
+                adjusted.pose.position.z = az + 0.034
+                adjusted.pose.orientation.w = 1.0
+                adjusted.scale.x = 0.018
+                adjusted.scale.y = 0.018
+                adjusted.scale.z = 0.018
+                self.set_marker_color(adjusted, (1.0, 0.0, 1.0, 1.0))
+                marker_array.markers.append(adjusted)
+
         for marker_id in range(10):
             old_target = Marker()
             old_target.header.frame_id = self.target_frame
@@ -597,23 +722,25 @@ class RealSensePCSubscriber(Node):
                 ])
                 cx, cy = world_pts.mean(axis=0)
 
-                # Span along each board axis (number of cells × step).
+                # Span along each board axis (number of cells x step).
                 rows = [r for r, _ in valid_cells]
                 cols = [c for _, c in valid_cells]
                 n_rows = max(1, max(rows) - min(rows) + 1)
                 n_cols = max(1, max(cols) - min(cols) + 1)
 
-                # row_dir is along world-X; col_dir is along world-Y.
-                # scale.x = extent in world-X = row span × row_step
-                # scale.y = extent in world-Y = col span × col_step
                 span_along_row_dir = n_rows * self.row_step
                 span_along_col_dir = n_cols * self.col_step
 
-                # Yaw of the marker cube matches the long axis of the piece.
+                # Marker local X is aligned to the piece long axis by yaw, so
+                # scale.x must be the long-axis span, not world/base X span.
+                long_axis = self.get_piece_long_axis()
                 if self.piece_yaw_along_col:
-                    long_axis = self.row_dir
+                    marker_long_span = span_along_row_dir
+                    marker_short_span = span_along_col_dir
                 else:
-                    long_axis = self.col_dir
+                    marker_long_span = span_along_col_dir
+                    marker_short_span = span_along_row_dir
+
                 piece_yaw = np.arctan2(long_axis[1], long_axis[0])
                 half_yaw = piece_yaw / 2.0
 
@@ -632,8 +759,8 @@ class RealSensePCSubscriber(Node):
                 piece_marker.pose.orientation.y = 0.0
                 piece_marker.pose.orientation.z = float(np.sin(half_yaw))
                 piece_marker.pose.orientation.w = float(np.cos(half_yaw))
-                piece_marker.scale.x = float(span_along_row_dir * 0.72)
-                piece_marker.scale.y = float(span_along_col_dir * 0.72)
+                piece_marker.scale.x = float(marker_long_span * 0.72)
+                piece_marker.scale.y = float(marker_short_span * 0.72)
                 piece_marker.scale.z = 0.010
                 self.set_marker_color(piece_marker, (1.0, 0.28, 0.05, 0.85))
                 marker_array.markers.append(piece_marker)
@@ -669,6 +796,24 @@ class RealSensePCSubscriber(Node):
             and 0.0 <= col <= float(self.playable_cols - 1)
         )
 
+    def get_piece_long_axis(self):
+        # piece_yaw_along_col=True means the piece spans multiple rows (same
+        # col), so its long axis is row_dir. Otherwise it spans multiple cols
+        # and its long axis is col_dir.
+        if self.piece_yaw_along_col:
+            return self.row_dir
+
+        return self.col_dir
+
+    def apply_piece_frame_place_offsets(self, x, y, z, long_axis):
+        across_axis = np.array([-long_axis[1], long_axis[0]])
+        xy = (
+            np.array([x, y])
+            + self.place_along_piece_offset * long_axis
+            + self.place_across_piece_offset * across_axis
+        )
+        return float(xy[0]), float(xy[1]), float(z + self.place_z_offset)
+
     def publish_board_test_pose(self, row=5, col=5):
         if not self.target_is_set:
             self.get_logger().info(
@@ -685,6 +830,9 @@ class RealSensePCSubscriber(Node):
 
         x, y, z = result
         physical_row, physical_col = self.game_to_physical_cell(row, col)
+        raw_x, raw_y, raw_z = x, y, z
+        long_axis = self.get_piece_long_axis()
+        x, y, z = self.apply_piece_frame_place_offsets(x, y, z, long_axis)
 
         pose = PoseStamped()
         pose.header.frame_id = self.target_frame
@@ -694,14 +842,6 @@ class RealSensePCSubscriber(Node):
         pose.pose.position.y = y
         pose.pose.position.z = z
 
-        # Align the gripper with the long axis of the piece.
-        # piece_yaw_along_col=True means the piece spans multiple rows (same
-        # col), so its long axis is row_dir. Otherwise it spans multiple cols
-        # and its long axis is col_dir.
-        if self.piece_yaw_along_col:
-            long_axis = self.row_dir
-        else:
-            long_axis = self.col_dir
         board_yaw = np.arctan2(long_axis[1], long_axis[0])
         half = board_yaw / 2.0
 
@@ -714,7 +854,9 @@ class RealSensePCSubscriber(Node):
         self.get_logger().info(
             f"Published place divot ({row:.2f},{col:.2f}) -> "
             f"physical ({physical_row:.2f},{physical_col:.2f}) -> "
-            f"x={x:.3f}, y={y:.3f}, z={z:.3f}, yaw={board_yaw:.3f}",
+            f"raw=({raw_x:.3f},{raw_y:.3f},{raw_z:.3f}), "
+            f"adjusted=({x:.3f},{y:.3f},{z:.3f}), "
+            f"yaw={board_yaw:.3f}",
             throttle_duration_sec=2.0
         )
 
@@ -769,21 +911,49 @@ class RealSensePCSubscriber(Node):
         g = (rgb >> 8) & 255
         b = rgb & 255
 
-        red_mask = (r > 150) & (g < 100) & (b < 100)
-        pts = xyz[red_mask]
+        red_mask = (r > 150) & (g < 110) & (b < 110)
+        blue_mask = (b > 120) & (r < 120) & (g < 170)
 
-        if len(pts) < self.cluster_min_pts:
+        red_pts = xyz[red_mask]
+        # Only keep points near the board region
+        x_min, x_max = -1.0, 1.0
+        y_min, y_max = 0.0, 1.0
+        z_min, z_max = -0.50, 0.0
+        board_region_mask = (
+            (red_pts[:, 0] > x_min) &
+            (red_pts[:, 0] < x_max) &
+            (red_pts[:, 1] > y_min) &
+            (red_pts[:, 1] < y_max) &
+            (red_pts[:, 2] > z_min) &
+            (red_pts[:, 2] < z_max)
+        )
+        red_pts = red_pts[board_region_mask]
+
+        blue_pts = xyz[blue_mask]
+
+        red_clusters = []
+        blue_clusters = []
+
+        if len(red_pts) >= self.cluster_min_pts:
+            red_clusters = self.euclidean_clustering(red_pts)
+        elif self.board_origin is None:
             self.get_logger().info(
                 f"Point cloud received from {msg.header.frame_id}, but only "
-                f"{len(pts)} red points passed threshold",
+                f"{len(red_pts)} red marker points passed threshold",
                 throttle_duration_sec=2.0
             )
-            return
 
-        clusters = self.euclidean_clustering(pts)
+        if len(blue_pts) >= self.cluster_min_pts:
+            blue_clusters = self.euclidean_clustering(blue_pts)
+        elif self.board_origin is not None:
+            self.get_logger().info(
+                f"Board is calibrated, but only {len(blue_pts)} blue robot "
+                "piece points passed threshold",
+                throttle_duration_sec=2.0
+            )
 
         one_by_one_clusters = [
-            cluster for cluster in clusters
+            cluster for cluster in red_clusters
             if self.estimate_shape(cluster) == "1x1"
         ]
 
@@ -808,14 +978,56 @@ class RealSensePCSubscriber(Node):
             # for game_manager to set a real target instead of using a default.
             self.publish_board_test_pose(self.place_row, self.place_col)
 
-            for cluster in clusters:
-                shape = self.estimate_shape(cluster)
+            if not self.target_is_set or not self.expected_robot_shape:
+                self.get_logger().info(
+                    "Board is calibrated, but no robot target/shape has been "
+                    "set yet. Not publishing blue pickup poses.",
+                    throttle_duration_sec=2.0
+                )
+                return
 
-                # Do not publish the origin marker as a pickable block
-                if shape == "1x1":
+            valid_blue_clusters = []
+            for cluster in blue_clusters:
+                centroid = np.mean(cluster, axis=0)
+                if self.is_xy_on_physical_board(centroid[:2]):
+                    row_col = self.world_to_physical_board_cell(centroid[:2])
+                    self.get_logger().info(
+                        "Skipping blue block already on board at physical "
+                        f"cell ({row_col[0]:.2f},{row_col[1]:.2f})",
+                        throttle_duration_sec=1.0
+                    )
                     continue
 
-                self.process_block(cluster, cloud.header)
+                shape = self.estimate_shape(cluster)
+                if not self.shape_matches_expected(shape):
+                    self.get_logger().info(
+                        f"Skipping blue {shape}; waiting for "
+                        f"{self.expected_robot_shape}",
+                        throttle_duration_sec=1.0
+                    )
+                    continue
+
+                valid_blue_clusters.append((shape, cluster))
+
+            if len(valid_blue_clusters) == 0:
+                self.get_logger().info(
+                    f"No off-board blue {self.expected_robot_shape} block "
+                    "available for pickup.",
+                    throttle_duration_sec=2.0
+                )
+                return
+
+            if len(valid_blue_clusters) > 1:
+                shapes = [shape for shape, _ in valid_blue_clusters]
+                self.get_logger().warn(
+                    "Multiple matching off-board blue robot blocks are "
+                    f"visible ({shapes}); refusing to guess pickup target.",
+                    throttle_duration_sec=2.0
+                )
+                return
+
+            _, cluster = valid_blue_clusters[0]
+            self.process_block(cluster, cloud.header)
 
     def process_block(self, pts, header):
         mean = np.mean(pts, axis=0)
@@ -842,7 +1054,7 @@ class RealSensePCSubscriber(Node):
 
         shape = f"{n_long}x{n_short}"
 
-        self.get_logger().info(f"Block detected: {shape}")
+        self.get_logger().info(f"Blue robot block detected: {shape}")
 
         pose = PoseStamped()
         pose.header = header
@@ -857,7 +1069,7 @@ class RealSensePCSubscriber(Node):
 
         self.pose_pub.publish(pose)
         self.get_logger().info(
-            "Published pick pose: "
+            "Published blue pick pose: "
             f"x={pose.pose.position.x:.3f}, "
             f"y={pose.pose.position.y:.3f}, "
             f"z={pose.pose.position.z:.3f}; "
@@ -868,7 +1080,7 @@ class RealSensePCSubscriber(Node):
 
         msg = String()
         msg.data = (
-            f"{shape}|x:{pose.pose.position.x:.3f},"
+            f"blue:{shape}|x:{pose.pose.position.x:.3f},"
             f"y:{pose.pose.position.y:.3f},z:{pose.pose.position.z:.3f}"
         )
         self.block_info_pub.publish(msg)
@@ -897,10 +1109,18 @@ class RealSensePCSubscriber(Node):
                 self.place_x_offset = float(param.value)
             elif param.name == 'place_y_offset':
                 self.place_y_offset = float(param.value)
+            elif param.name == 'place_along_piece_offset':
+                self.place_along_piece_offset = float(param.value)
+            elif param.name == 'place_across_piece_offset':
+                self.place_across_piece_offset = float(param.value)
+            elif param.name == 'place_z_offset':
+                self.place_z_offset = float(param.value)
             elif param.name == 'use_measured_grid':
                 self.use_measured_grid = bool(param.value)
             elif param.name == 'use_oriented_box_center':
                 self.use_oriented_box_center = bool(param.value)
+            elif param.name == 'grid_step_warn_ratio':
+                self.grid_step_warn_ratio = float(param.value)
             elif param.name == 'invert_playable_rows':
                 self.invert_playable_rows = bool(param.value)
             elif param.name == 'invert_playable_cols':
@@ -908,6 +1128,8 @@ class RealSensePCSubscriber(Node):
             elif param.name == 'robot_target_cells':
                 self.robot_target_cells = self.parse_target_cells(param.value)
                 self.target_is_set = True
+            elif param.name == 'expected_robot_shape':
+                self.expected_robot_shape = str(param.value)
             elif param.name == 'piece_yaw_along_col':
                 self.piece_yaw_along_col = bool(param.value)
             elif param.name == 'target_is_set':
@@ -917,6 +1139,11 @@ class RealSensePCSubscriber(Node):
             f"Place divot set to ({self.place_row:.2f},{self.place_col:.2f}); "
             f"target_set={self.target_is_set}; "
             f"robot_cells={self.robot_target_cells}; "
+            f"expected_shape={self.expected_robot_shape}; "
+            "piece_frame_offsets="
+            f"({self.place_along_piece_offset:.4f},"
+            f"{self.place_across_piece_offset:.4f},"
+            f"{self.place_z_offset:.4f}); "
             f"invert_rows={self.invert_playable_rows}, "
             f"invert_cols={self.invert_playable_cols}",
             throttle_duration_sec=1.0

@@ -25,7 +25,7 @@ class UR7e_CubeGrasp(Node):
         self.rotation_applied = False
 
         self.cube_pub = self.create_subscription(
-            PoseStamped, '/cube_pose_red', self.cube_callback, 1
+            PoseStamped, '/cube_pose_blue', self.cube_callback, 1
         )
         self.joint_state_sub = self.create_subscription(
             JointState, '/joint_states', self.joint_state_callback, 1
@@ -46,6 +46,7 @@ class UR7e_CubeGrasp(Node):
 
         self.cube_pose = None
         self.latest_cube_pose = None
+        self.latest_cube_pose_time = None
         self.current_plan = None
         self.joint_state = None
 
@@ -73,6 +74,9 @@ class UR7e_CubeGrasp(Node):
         )
         self.max_board_pose_age = float(
             self.declare_parameter('max_board_pose_age', 2.0).value
+        )
+        self.max_cube_pose_age = float(
+            self.declare_parameter('max_cube_pose_age', 2.0).value
         )
         requested_auto_start = bool(
             self.declare_parameter('auto_start', False).value
@@ -144,6 +148,8 @@ class UR7e_CubeGrasp(Node):
                 self.place_down_adjustment = float(param.value)
             elif param.name == 'max_board_pose_age':
                 self.max_board_pose_age = float(param.value)
+            elif param.name == 'max_cube_pose_age':
+                self.max_cube_pose_age = float(param.value)
             elif param.name == 'auto_start':
                 self.auto_start = False
                 if bool(param.value):
@@ -163,7 +169,17 @@ class UR7e_CubeGrasp(Node):
     def start_robot_move_callback(self, request, response):
         if self.latest_cube_pose is None:
             response.success = False
-            response.message = 'No red block pose available yet'
+            response.message = 'No blue robot block pose available yet'
+            return response
+
+        cube_pose_age = (
+            self.get_clock().now() - self.latest_cube_pose_time
+        ).nanoseconds / 1e9
+        if cube_pose_age > self.max_cube_pose_age:
+            response.success = False
+            response.message = (
+                f'Blue robot block pose is stale ({cube_pose_age:.2f}s old)'
+            )
             return response
 
         if self.cube_pose is not None:
@@ -171,7 +187,10 @@ class UR7e_CubeGrasp(Node):
             response.message = 'Robot move already in progress'
             return response
 
-        self.get_logger().info('Starting robot move from game_manager')
+        self.get_logger().info(
+            "Starting robot move from game_manager with fresh blue pickup "
+            f"pose ({cube_pose_age:.2f}s old)"
+        )
         started = self.start_pick_place(self.latest_cube_pose)
         response.success = bool(started)
         response.message = (
@@ -181,6 +200,7 @@ class UR7e_CubeGrasp(Node):
 
     def cube_callback(self, cube_pose):
         self.latest_cube_pose = cube_pose
+        self.latest_cube_pose_time = self.get_clock().now()
 
     def start_pick_place(self, cube_pose):
         if self.cube_pose is not None:
@@ -223,7 +243,9 @@ class UR7e_CubeGrasp(Node):
 
         board_q = self.board_pose.pose.orientation
         board_yaw = 2.0 * np.arctan2(board_q.z, board_q.w)
-        board_place_yaw = board_yaw
+        # /board_test_pose stores the desired piece long-axis yaw. The gripper
+        # yaw needs to be perpendicular to that axis, matching the pick logic.
+        board_place_yaw = board_yaw + (np.pi / 2.0)
         q_place_rot = R.from_euler('ZYX', [board_place_yaw, np.pi, 0.0])
         q_place = q_place_rot.as_quat()
 
@@ -278,7 +300,8 @@ class UR7e_CubeGrasp(Node):
 
         self.get_logger().info(
             f"Board divot target: x={board_x:.3f}, y={board_y:.3f}, "
-            f"z={place_z:.3f}, yaw={board_yaw:.3f}"
+            f"z={place_z:.3f}, piece_yaw={board_yaw:.3f}, "
+            f"gripper_yaw={board_place_yaw:.3f}"
         )
 
         self.publish_place_marker(board_x, board_y, place_z)
@@ -332,8 +355,13 @@ class UR7e_CubeGrasp(Node):
 
     def execute_jobs(self):
         if not self.job_queue:
-            self.get_logger().info("All jobs completed.")
-            rclpy.shutdown()
+            self.get_logger().info(
+                "All jobs completed. Robot move sequence is ready for the "
+                "next turn."
+            )
+            self.cube_pose = None
+            self.latest_cube_pose = None
+            self.latest_cube_pose_time = None
             return
 
         self.get_logger().info(f"Executing job queue, {len(self.job_queue)} jobs remaining.")

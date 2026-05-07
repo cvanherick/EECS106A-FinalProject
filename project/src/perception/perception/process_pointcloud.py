@@ -324,11 +324,11 @@ class RealSensePCSubscriber(Node):
             row_span = short_span
             col_span = long_span
 
-        if np.dot(row_dir, self.row_dir) < 0.0:
-            row_dir = -row_dir
+        # if np.dot(row_dir, self.row_dir) < 0.0:
+            # row_dir = -row_dir
 
-        if np.dot(col_dir, self.col_dir) < 0.0:
-            col_dir = -col_dir
+        # if np.dot(col_dir, self.col_dir) < 0.0:
+            # col_dir = -col_dir
 
         measured_row_step = row_span / float(self.corner_span_rows)
         measured_col_step = col_span / float(self.corner_span_cols)
@@ -915,6 +915,20 @@ class RealSensePCSubscriber(Node):
         blue_mask = (b > 120) & (r < 120) & (g < 170)
 
         red_pts = xyz[red_mask]
+        # Only keep points near the board region
+        x_min, x_max = -1.0, 1.0
+        y_min, y_max = -1.0, 1.0
+        z_min, z_max = -0.50, 1.0
+        board_region_mask = (
+            (red_pts[:, 0] > x_min) &
+            (red_pts[:, 0] < x_max) &
+            (red_pts[:, 1] > y_min) &
+            (red_pts[:, 1] < y_max) &
+            (red_pts[:, 2] > z_min) &
+            (red_pts[:, 2] < z_max)
+        )
+        red_pts = red_pts[board_region_mask]
+
         blue_pts = xyz[blue_mask]
 
         red_clusters = []

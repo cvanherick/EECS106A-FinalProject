@@ -1,0 +1,23 @@
+running egg_info
+writing ../../build/perception/perception.egg-info/PKG-INFO
+writing dependency_links to ../../build/perception/perception.egg-info/dependency_links.txt
+writing entry points to ../../build/perception/perception.egg-info/entry_points.txt
+writing requirements to ../../build/perception/perception.egg-info/requires.txt
+writing top-level names to ../../build/perception/perception.egg-info/top_level.txt
+reading manifest file '../../build/perception/perception.egg-info/SOURCES.txt'
+writing manifest file '../../build/perception/perception.egg-info/SOURCES.txt'
+running build
+running build_py
+copying perception/process_pointcloud.py -> /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/build/lib/perception
+running install
+running install_lib
+copying /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/build/lib/perception/process_pointcloud.py -> /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/python3.10/site-packages/perception
+byte-compiling /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/python3.10/site-packages/perception/process_pointcloud.py to process_pointcloud.cpython-310.pyc
+running install_data
+running install_egg_info
+removing '/home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/python3.10/site-packages/perception-0.0.0-py3.10.egg-info' (and everything under it)
+Copying ../../build/perception/perception.egg-info to /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/python3.10/site-packages/perception-0.0.0-py3.10.egg-info
+running install_scripts
+Installing interactive_plane script to /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/perception
+Installing process_pointcloud script to /home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/install/perception/lib/perception
+writing list of installed files to '/home/cc/ee106a/sp26/class/ee106a-abh/final_project/project/build/perception/install.log'
