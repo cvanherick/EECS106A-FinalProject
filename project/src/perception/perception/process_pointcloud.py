@@ -1,4 +1,5 @@
 import rclpy
+from itertools import combinations
 from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 from geometry_msgs.msg import PoseStamped
@@ -9,6 +10,7 @@ from tf2_ros import Buffer, TransformListener, TransformException
 from rclpy.time import Time
 from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
 from rcl_interfaces.msg import SetParametersResult
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 class RealSensePCSubscriber(Node):
@@ -52,6 +54,8 @@ class RealSensePCSubscriber(Node):
         # NOTE: If the robot is overshooting, measure the physical
         # distance between two peg centers and update this number!
         self.CELL_SIZE = 0.03175
+        self.expected_board_long_span = (12 - 1) * self.CELL_SIZE
+        self.expected_board_short_span = (10 - 1) * self.CELL_SIZE
 
         self.board_rows = max(
             1,
@@ -85,6 +89,12 @@ class RealSensePCSubscriber(Node):
                 ).value
             )
         )
+        self.invert_playable_rows = bool(
+            self.declare_parameter('invert_playable_rows', False).value
+        )
+        self.invert_playable_cols = bool(
+            self.declare_parameter('invert_playable_cols', False).value
+        )
 
         self.board_origin = None
         self.board_center = None
@@ -108,6 +118,15 @@ class RealSensePCSubscriber(Node):
                     self.board_cols - 1
                 ).value
             )
+        )
+        self.expected_board_long_span = (
+            max(self.corner_span_rows, self.corner_span_cols) * self.CELL_SIZE
+        )
+        self.expected_board_short_span = (
+            min(self.corner_span_rows, self.corner_span_cols) * self.CELL_SIZE
+        )
+        self.min_corner_span_ratio = float(
+            self.declare_parameter('min_corner_span_ratio', 0.65).value
         )
         default_place_row = float(
             self.declare_parameter('target_row', 5.0).value
@@ -155,6 +174,15 @@ class RealSensePCSubscriber(Node):
             '/board_test_pose',
             10
         )
+        self.board_divot_marker_pub = self.create_publisher(
+            MarkerArray,
+            '/board_divot_markers',
+            10
+        )
+        self.board_marker_timer = self.create_timer(
+            1.0,
+            self.publish_board_divot_markers
+        )
 
         self.add_on_set_parameters_callback(self._on_parameter_update)
 
@@ -167,9 +195,18 @@ class RealSensePCSubscriber(Node):
             f"Physical board: {self.board_rows}x{self.board_cols}; "
             f"game board: {self.playable_rows}x{self.playable_cols} "
             f"offset by ({self.playable_row_offset},{self.playable_col_offset}); "
+            f"invert_rows={self.invert_playable_rows}, "
+            f"invert_cols={self.invert_playable_cols}; "
             "red 1x1 corner blocks are calibration markers; "
             f"place=({self.place_row:.1f},{self.place_col:.1f}), "
             f"cell={self.CELL_SIZE:.5f} m"
+        )
+        self.get_logger().info(
+            "Expected board marker span: "
+            f"long={self.expected_board_long_span:.4f} m "
+            f"({self.expected_board_long_span / 0.0254:.2f} in), "
+            f"short={self.expected_board_short_span:.4f} m "
+            f"({self.expected_board_short_span / 0.0254:.2f} in)"
         )
 
     def euclidean_clustering(self, points):
@@ -231,38 +268,18 @@ class RealSensePCSubscriber(Node):
         if len(centroids) < 4:
             return False
 
-        xy_all = centroids[:, :2]
-        center = np.mean(xy_all, axis=0)
+        corners, long_span, short_span, long_dir, short_dir = (
+            self.select_board_corner_markers(centroids)
+        )
 
-        # If extra 1x1 red blocks are visible, use the four outermost markers.
-        distances = np.linalg.norm(xy_all - center, axis=1)
-        corner_indices = np.argsort(distances)[-4:]
-        corners = centroids[corner_indices]
-
-        centered = corners[:, :2] - center
-        _, _, vh = np.linalg.svd(centered, full_matrices=False)
-        axis_a = vh[0]
-        axis_b = vh[1]
-
-        span_a = np.ptp(centered @ axis_a)
-        span_b = np.ptp(centered @ axis_b)
-
-        if span_a == 0.0 or span_b == 0.0:
+        if corners is None:
             self.get_logger().warn(
-                "Could not infer board frame from corner markers"
+                "Saw 1x1 red clusters, but none matched the expected "
+                "12x10 board corner span. Move non-corner red pieces away "
+                "from the board markers.",
+                throttle_duration_sec=2.0
             )
             return False
-
-        if span_a >= span_b:
-            long_dir = axis_a
-            short_dir = axis_b
-            long_span = span_a
-            short_span = span_b
-        else:
-            long_dir = axis_b
-            short_dir = axis_a
-            long_span = span_b
-            short_span = span_a
 
         row_dir = long_dir
         col_dir = short_dir
@@ -279,6 +296,7 @@ class RealSensePCSubscriber(Node):
             row_step = long_span / float(self.corner_span_rows)
             col_step = short_span / float(self.corner_span_cols)
 
+        center = np.mean(corners[:, :2], axis=0)
         self.board_center = center
         self.board_origin = (
             center
@@ -334,6 +352,62 @@ class RealSensePCSubscriber(Node):
 
         return True
 
+    def select_board_corner_markers(self, centroids):
+        best = None
+        min_long_span = self.expected_board_long_span * self.min_corner_span_ratio
+        min_short_span = self.expected_board_short_span * self.min_corner_span_ratio
+
+        for candidate in combinations(centroids, 4):
+            corners = np.array(candidate)
+            centered = corners[:, :2] - np.mean(corners[:, :2], axis=0)
+            _, _, vh = np.linalg.svd(centered, full_matrices=False)
+            axis_a = vh[0]
+            axis_b = vh[1]
+
+            span_a = np.ptp(centered @ axis_a)
+            span_b = np.ptp(centered @ axis_b)
+
+            if span_a >= span_b:
+                long_dir = axis_a
+                short_dir = axis_b
+                long_span = span_a
+                short_span = span_b
+            else:
+                long_dir = axis_b
+                short_dir = axis_a
+                long_span = span_b
+                short_span = span_a
+
+            if long_span < min_long_span or short_span < min_short_span:
+                continue
+
+            span_score = (
+                abs(long_span - self.expected_board_long_span)
+                + abs(short_span - self.expected_board_short_span)
+            )
+            aspect_score = abs(
+                (long_span / short_span)
+                - (self.expected_board_long_span / self.expected_board_short_span)
+            )
+            score = span_score + 0.1 * aspect_score
+
+            if best is None or score < best[0]:
+                best = (score, corners, long_span, short_span, long_dir, short_dir)
+
+        if best is None:
+            xy = centroids[:, :2]
+            self.get_logger().warn(
+                "Rejected board marker candidates. "
+                f"Expected at least long={min_long_span:.3f} m and "
+                f"short={min_short_span:.3f} m. "
+                f"Detected 1x1 centroids: {np.round(xy, 3).tolist()}",
+                throttle_duration_sec=2.0
+            )
+            return None, None, None, None, None
+
+        _, corners, long_span, short_span, long_dir, short_dir = best
+        return corners, long_span, short_span, long_dir, short_dir
+
     def board_to_world(self, row, col):
         if self.board_origin is None:
             return None
@@ -347,10 +421,23 @@ class RealSensePCSubscriber(Node):
             )
             return None
 
-        physical_row = row + self.playable_row_offset
-        physical_col = col + self.playable_col_offset
+        physical_row, physical_col = self.game_to_physical_cell(row, col)
 
         return self.physical_board_to_world(physical_row, physical_col)
+
+    def game_to_physical_cell(self, row, col):
+        game_row = row
+        game_col = col
+
+        if self.invert_playable_rows:
+            game_row = (self.playable_rows - 1) - game_row
+
+        if self.invert_playable_cols:
+            game_col = (self.playable_cols - 1) - game_col
+
+        physical_row = game_row + self.playable_row_offset
+        physical_col = game_col + self.playable_col_offset
+        return physical_row, physical_col
 
     def physical_board_to_world(self, row, col):
         xy = (
@@ -360,6 +447,93 @@ class RealSensePCSubscriber(Node):
         )
         xy = xy + np.array([self.place_x_offset, self.place_y_offset])
         return float(xy[0]), float(xy[1]), float(self.board_z)
+
+    def is_playable_physical_cell(self, row, col):
+        return (
+            self.playable_row_offset
+            <= row
+            < self.playable_row_offset + self.playable_rows
+            and self.playable_col_offset
+            <= col
+            < self.playable_col_offset + self.playable_cols
+        )
+
+    def is_corner_physical_cell(self, row, col):
+        return (
+            row in (0, self.corner_span_rows)
+            and col in (0, self.corner_span_cols)
+        )
+
+    def set_marker_color(self, marker, rgba):
+        marker.color.r = rgba[0]
+        marker.color.g = rgba[1]
+        marker.color.b = rgba[2]
+        marker.color.a = rgba[3]
+
+    def publish_board_divot_markers(self):
+        if self.board_origin is None:
+            return
+
+        marker_array = MarkerArray()
+        stamp = self.get_clock().now().to_msg()
+
+        for row in range(self.board_rows):
+            for col in range(self.board_cols):
+                marker = Marker()
+                marker.header.frame_id = self.target_frame
+                marker.header.stamp = stamp
+                marker.ns = 'board_divots'
+                marker.id = row * self.board_cols + col
+                marker.type = Marker.SPHERE
+                marker.action = Marker.ADD
+
+                x, y, z = self.physical_board_to_world(row, col)
+                marker.pose.position.x = x
+                marker.pose.position.y = y
+                marker.pose.position.z = z + 0.006
+                marker.pose.orientation.w = 1.0
+
+                marker.scale.x = 0.010
+                marker.scale.y = 0.010
+                marker.scale.z = 0.010
+
+                if self.is_corner_physical_cell(row, col):
+                    self.set_marker_color(marker, (1.0, 0.05, 0.05, 1.0))
+                    marker.scale.x = 0.018
+                    marker.scale.y = 0.018
+                    marker.scale.z = 0.018
+                elif self.is_playable_physical_cell(row, col):
+                    self.set_marker_color(marker, (0.1, 0.45, 1.0, 0.9))
+                else:
+                    self.set_marker_color(marker, (0.65, 0.65, 0.65, 0.45))
+
+                marker_array.markers.append(marker)
+
+        if self.is_valid_divot(self.place_row, self.place_col):
+            physical_row, physical_col = self.game_to_physical_cell(
+                self.place_row,
+                self.place_col
+            )
+            target = Marker()
+            target.header.frame_id = self.target_frame
+            target.header.stamp = stamp
+            target.ns = 'board_divots'
+            target.id = self.board_rows * self.board_cols
+            target.type = Marker.SPHERE
+            target.action = Marker.ADD
+
+            x, y, z = self.physical_board_to_world(physical_row, physical_col)
+            target.pose.position.x = x
+            target.pose.position.y = y
+            target.pose.position.z = z + 0.018
+            target.pose.orientation.w = 1.0
+            target.scale.x = 0.026
+            target.scale.y = 0.026
+            target.scale.z = 0.026
+            self.set_marker_color(target, (1.0, 0.85, 0.0, 1.0))
+            marker_array.markers.append(target)
+
+        self.board_divot_marker_pub.publish(marker_array)
 
 
     def estimate_oriented_box(self, pts):
@@ -397,6 +571,7 @@ class RealSensePCSubscriber(Node):
             return
 
         x, y, z = result
+        physical_row, physical_col = self.game_to_physical_cell(row, col)
 
         pose = PoseStamped()
         pose.header.frame_id = self.target_frame
@@ -417,6 +592,7 @@ class RealSensePCSubscriber(Node):
         self.board_test_pose_pub.publish(pose)
         self.get_logger().info(
             f"Published place divot ({row:.2f},{col:.2f}) -> "
+            f"physical ({physical_row:.2f},{physical_col:.2f}) -> "
             f"x={x:.3f}, y={y:.3f}, z={z:.3f}, yaw={board_yaw:.3f}",
             throttle_duration_sec=2.0
         )
@@ -599,9 +775,15 @@ class RealSensePCSubscriber(Node):
                 self.use_measured_grid = bool(param.value)
             elif param.name == 'use_oriented_box_center':
                 self.use_oriented_box_center = bool(param.value)
+            elif param.name == 'invert_playable_rows':
+                self.invert_playable_rows = bool(param.value)
+            elif param.name == 'invert_playable_cols':
+                self.invert_playable_cols = bool(param.value)
 
         self.get_logger().info(
-            f"Place divot set to ({self.place_row:.2f},{self.place_col:.2f})",
+            f"Place divot set to ({self.place_row:.2f},{self.place_col:.2f}); "
+            f"invert_rows={self.invert_playable_rows}, "
+            f"invert_cols={self.invert_playable_cols}",
             throttle_duration_sec=1.0
         )
         return SetParametersResult(successful=True)
