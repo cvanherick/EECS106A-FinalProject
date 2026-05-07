@@ -81,7 +81,12 @@ def generate_launch_description():
         package='planning',
         executable='main',
         name='cube_grasp',
-        output='screen'
+        output='screen',
+        parameters=[{
+            'post_grasp_lift_extra': 0.01,
+            'place_extra_down_adjustment': 0.01,
+            'place_jiggle_distance': 0.002,
+        }]
     )
 
     # -------------------------

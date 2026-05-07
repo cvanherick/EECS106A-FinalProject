@@ -72,6 +72,15 @@ class UR7e_CubeGrasp(Node):
         self.place_down_adjustment = float(
             self.declare_parameter('place_down_adjustment', 0.01).value
         )
+        self.post_grasp_lift_extra = float(
+            self.declare_parameter('post_grasp_lift_extra', 0.01).value
+        )
+        self.place_extra_down_adjustment = float(
+            self.declare_parameter('place_extra_down_adjustment', 0.01).value
+        )
+        self.place_jiggle_distance = float(
+            self.declare_parameter('place_jiggle_distance', 0.002).value
+        )
         self.max_board_pose_age = float(
             self.declare_parameter('max_board_pose_age', 2.0).value
         )
@@ -146,6 +155,12 @@ class UR7e_CubeGrasp(Node):
                 self.grasp_offset = float(param.value)
             elif param.name == 'place_down_adjustment':
                 self.place_down_adjustment = float(param.value)
+            elif param.name == 'post_grasp_lift_extra':
+                self.post_grasp_lift_extra = float(param.value)
+            elif param.name == 'place_extra_down_adjustment':
+                self.place_extra_down_adjustment = float(param.value)
+            elif param.name == 'place_jiggle_distance':
+                self.place_jiggle_distance = float(param.value)
             elif param.name == 'max_board_pose_age':
                 self.max_board_pose_age = float(param.value)
             elif param.name == 'max_cube_pose_age':
@@ -162,7 +177,10 @@ class UR7e_CubeGrasp(Node):
             "Updated calibration: "
             f"approach={self.approach_offset:.4f}, "
             f"grasp={self.grasp_offset:.4f}, "
-            f"place_down={self.place_down_adjustment:.4f}"
+            f"place_down={self.place_down_adjustment:.4f}, "
+            f"post_grasp_lift_extra={self.post_grasp_lift_extra:.4f}, "
+            f"place_extra_down={self.place_extra_down_adjustment:.4f}, "
+            f"place_jiggle={self.place_jiggle_distance:.4f}"
         )
         return SetParametersResult(successful=True)
 
@@ -287,16 +305,36 @@ class UR7e_CubeGrasp(Node):
             self.cube_pose = None
             return False
 
+        post_grasp_lift_joints = self.ik_planner.compute_ik(
+            grasp_joints,
+            pick_x,
+            pick_y,
+            pick_z + self.approach_offset + self.post_grasp_lift_extra,
+            qx=float(q_final[0]),
+            qy=float(q_final[1]),
+            qz=float(q_final[2]),
+            qw=float(q_final[3])
+        )
+        if not post_grasp_lift_joints:
+            self.get_logger().error("Post-grasp lift IK failed, aborting")
+            self.cube_pose = None
+            return False
+
         self.job_queue.append(pre_grasp_joints)
         self.job_queue.append(grasp_joints)
         self.job_queue.append('toggle_grip')
-        self.job_queue.append(pre_grasp_joints)
+        self.job_queue.append(post_grasp_lift_joints)
 
         board_x = self.board_pose.pose.position.x
         board_y = self.board_pose.pose.position.y
         board_z = self.board_pose.pose.position.z
         place_hover_z = board_z + self.approach_offset
-        place_z = board_z + self.grasp_offset - self.place_down_adjustment
+        place_z = (
+            board_z
+            + self.grasp_offset
+            - self.place_down_adjustment
+            - self.place_extra_down_adjustment
+        )
 
         self.get_logger().info(
             f"Board divot target: x={board_x:.3f}, y={board_y:.3f}, "
@@ -307,9 +345,9 @@ class UR7e_CubeGrasp(Node):
         self.publish_place_marker(board_x, board_y, place_z)
 
         # --- PLACE HOVER ---
-        # Seed from pre_grasp: the robot returns there after lifting off the block.
+        # Seed from post-grasp lift: the robot moves to place from higher up.
         place_hover_joints = self.ik_planner.compute_ik(
-            pre_grasp_joints,
+            post_grasp_lift_joints,
             board_x,
             board_y,
             place_hover_z,
@@ -342,9 +380,45 @@ class UR7e_CubeGrasp(Node):
             self.cube_pose = None
             return False
 
+        jiggle_joints = []
+        jiggle_distance = max(0.0, self.place_jiggle_distance)
+        if jiggle_distance > 0.0:
+            long_axis = np.array([np.cos(board_yaw), np.sin(board_yaw)])
+            across_axis = np.array([-long_axis[1], long_axis[0]])
+            jiggle_targets = [
+                (board_x + jiggle_distance * long_axis[0],
+                 board_y + jiggle_distance * long_axis[1]),
+                (board_x + jiggle_distance * across_axis[0],
+                 board_y + jiggle_distance * across_axis[1]),
+                (board_x, board_y),
+            ]
+
+            seed = place_joints
+            for jx, jy in jiggle_targets:
+                jiggle_joint = self.ik_planner.compute_ik(
+                    seed,
+                    jx,
+                    jy,
+                    place_z,
+                    qx=float(q_place[0]),
+                    qy=float(q_place[1]),
+                    qz=float(q_place[2]),
+                    qw=float(q_place[3])
+                )
+                if not jiggle_joint:
+                    self.get_logger().warn(
+                        "Place jiggle IK failed; continuing without jiggle."
+                    )
+                    jiggle_joints = []
+                    break
+
+                jiggle_joints.append(jiggle_joint)
+                seed = jiggle_joint
+
         self.get_logger().info("All IK solutions found, executing sequence")
         self.job_queue.append(place_hover_joints)
         self.job_queue.append(place_joints)
+        self.job_queue.extend(jiggle_joints)
         self.job_queue.append('toggle_grip')
         self.job_queue.append(place_hover_joints)
         self.job_queue.append('reset_state')
