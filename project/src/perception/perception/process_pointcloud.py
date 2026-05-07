@@ -140,8 +140,11 @@ class RealSensePCSubscriber(Node):
         self.place_col = float(
             self.declare_parameter('place_col', default_place_col).value
         )
+        self.target_is_set = bool(
+            self.declare_parameter('target_is_set', False).value
+        )
         self.robot_target_cells = self.parse_target_cells(
-            self.declare_parameter('robot_target_cells', '0,0').value
+            self.declare_parameter('robot_target_cells', '').value
         )
 
         # Hardcoded axes. Y is flipped to 1.0 to prevent moving the wrong way.
@@ -201,6 +204,7 @@ class RealSensePCSubscriber(Node):
             f"invert_rows={self.invert_playable_rows}, "
             f"invert_cols={self.invert_playable_cols}; "
             "red 1x1 corner blocks are calibration markers; "
+            f"target_set={self.target_is_set}, "
             f"place=({self.place_row:.1f},{self.place_col:.1f}), "
             f"cell={self.CELL_SIZE:.5f} m"
         )
@@ -545,7 +549,7 @@ class RealSensePCSubscriber(Node):
 
                 marker_array.markers.append(marker)
 
-        if self.is_valid_divot(self.place_row, self.place_col):
+        if self.target_is_set and self.is_valid_divot(self.place_row, self.place_col):
             physical_row, physical_col = self.game_to_physical_cell(
                 self.place_row,
                 self.place_col
@@ -634,6 +638,14 @@ class RealSensePCSubscriber(Node):
         )
 
     def publish_board_test_pose(self, row=5, col=5):
+        if not self.target_is_set:
+            self.get_logger().info(
+                "Board frame is calibrated, but no placement target has "
+                "been set yet. Waiting for game_manager.",
+                throttle_duration_sec=2.0
+            )
+            return
+
         result = self.board_to_world(row, col)
 
         if result is None:
@@ -752,7 +764,8 @@ class RealSensePCSubscriber(Node):
         # 2. PASS TWO: Process pickable blocks after board calibration
         if self.board_origin is not None:
             # Publish board pose before cube poses so planning has the target
-            # before the first pick callback fires.
+            # before the first pick callback fires. This intentionally waits
+            # for game_manager to set a real target instead of using a default.
             self.publish_board_test_pose(self.place_row, self.place_col)
 
             for cluster in clusters:
@@ -824,12 +837,16 @@ class RealSensePCSubscriber(Node):
         for param in params:
             if param.name == 'place_row':
                 self.place_row = float(param.value)
+                self.target_is_set = True
             elif param.name == 'place_col':
                 self.place_col = float(param.value)
+                self.target_is_set = True
             elif param.name == 'target_row':
                 self.place_row = float(param.value)
+                self.target_is_set = True
             elif param.name == 'target_col':
                 self.place_col = float(param.value)
+                self.target_is_set = True
             elif param.name == 'block_pick_z_offset':
                 self.block_pick_z_offset = float(param.value)
             elif param.name == 'pick_x_offset':
@@ -850,9 +867,13 @@ class RealSensePCSubscriber(Node):
                 self.invert_playable_cols = bool(param.value)
             elif param.name == 'robot_target_cells':
                 self.robot_target_cells = self.parse_target_cells(param.value)
+                self.target_is_set = True
+            elif param.name == 'target_is_set':
+                self.target_is_set = bool(param.value)
 
         self.get_logger().info(
             f"Place divot set to ({self.place_row:.2f},{self.place_col:.2f}); "
+            f"target_set={self.target_is_set}; "
             f"robot_cells={self.robot_target_cells}; "
             f"invert_rows={self.invert_playable_rows}, "
             f"invert_cols={self.invert_playable_cols}",

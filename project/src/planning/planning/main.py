@@ -76,9 +76,15 @@ class UR7e_CubeGrasp(Node):
         self.place_y_offset = float(
             self.declare_parameter('place_y_offset', 0.0).value
         )
-        self.auto_start = bool(
+        requested_auto_start = bool(
             self.declare_parameter('auto_start', False).value
         )
+        self.auto_start = False
+        if requested_auto_start:
+            self.get_logger().warn(
+                "Ignoring auto_start=true. Robot motion now requires an "
+                "explicit /start_robot_move service call."
+            )
         self.add_on_set_parameters_callback(self._on_parameter_update)
         self.ur7e_utils_commands = {
             'reset_state': [
@@ -142,7 +148,12 @@ class UR7e_CubeGrasp(Node):
             elif param.name == 'place_y_offset':
                 self.place_y_offset = float(param.value)
             elif param.name == 'auto_start':
-                self.auto_start = bool(param.value)
+                self.auto_start = False
+                if bool(param.value):
+                    self.get_logger().warn(
+                        "Ignoring auto_start=true. Use /start_robot_move to "
+                        "begin motion."
+                    )
 
         self.get_logger().info(
             "Updated calibration: "
@@ -174,11 +185,6 @@ class UR7e_CubeGrasp(Node):
 
     def cube_callback(self, cube_pose):
         self.latest_cube_pose = cube_pose
-
-        if not self.auto_start:
-            return
-
-        self.start_pick_place(cube_pose)
 
     def start_pick_place(self, cube_pose):
         if self.cube_pose is not None:

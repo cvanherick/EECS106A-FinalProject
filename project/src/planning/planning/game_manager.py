@@ -346,6 +346,7 @@ class GameManager(Node):
             self.make_float_param('place_row', float(row)),
             self.make_float_param('place_col', float(col)),
             self.make_string_param('robot_target_cells', target_cell_text),
+            self.make_bool_param('target_is_set', True),
         ]
 
         future = self.param_client.call_async(request)
@@ -410,6 +411,15 @@ class GameManager(Node):
         param.value = ParameterValue(
             type=ParameterType.PARAMETER_STRING,
             string_value=value
+        )
+        return param
+
+    def make_bool_param(self, name, value):
+        param = Parameter()
+        param.name = name
+        param.value = ParameterValue(
+            type=ParameterType.PARAMETER_BOOL,
+            bool_value=value
         )
         return param
 
