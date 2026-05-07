@@ -12,7 +12,7 @@ def generate_launch_description():
     # -------------------------
 
     ur_type = LaunchConfiguration("ur_type", default="ur7e")
-    launch_rviz = LaunchConfiguration("launch_rviz", default="false")
+    launch_rviz = LaunchConfiguration("launch_rviz", default="true")
     pointcloud_topic = LaunchConfiguration("pointcloud_topic")
 
     # -------------------------

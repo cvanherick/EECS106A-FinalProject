@@ -879,6 +879,8 @@ class RealSensePCSubscriber(Node):
             f"invert_cols={self.invert_playable_cols}",
             throttle_duration_sec=1.0
         )
+        if self.board_origin is not None and self.target_is_set:
+            self.publish_board_test_pose(self.place_row, self.place_col)
         return SetParametersResult(successful=True)
 
 

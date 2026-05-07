@@ -57,6 +57,7 @@ class UR7e_CubeGrasp(Node):
         )
 
         self.board_pose = None
+        self.board_pose_time = None
 
         self.ik_planner = IKPlanner()
 
@@ -75,6 +76,9 @@ class UR7e_CubeGrasp(Node):
         )
         self.place_y_offset = float(
             self.declare_parameter('place_y_offset', 0.0).value
+        )
+        self.max_board_pose_age = float(
+            self.declare_parameter('max_board_pose_age', 2.0).value
         )
         requested_auto_start = bool(
             self.declare_parameter('auto_start', False).value
@@ -131,6 +135,7 @@ class UR7e_CubeGrasp(Node):
 
     def board_pose_callback(self, msg):
         self.board_pose = msg
+        self.board_pose_time = self.get_clock().now()
 
     def joint_state_callback(self, msg: JointState):
         self.joint_state = msg
@@ -147,6 +152,8 @@ class UR7e_CubeGrasp(Node):
                 self.place_x_offset = float(param.value)
             elif param.name == 'place_y_offset':
                 self.place_y_offset = float(param.value)
+            elif param.name == 'max_board_pose_age':
+                self.max_board_pose_age = float(param.value)
             elif param.name == 'auto_start':
                 self.auto_start = False
                 if bool(param.value):
@@ -202,6 +209,17 @@ class UR7e_CubeGrasp(Node):
             self.get_logger().info(
                 "No board pose yet, waiting for /board_test_pose",
                 throttle_duration_sec=2.0
+            )
+            return False
+
+        board_pose_age = (
+            self.get_clock().now() - self.board_pose_time
+        ).nanoseconds / 1e9
+        if board_pose_age > self.max_board_pose_age:
+            self.get_logger().warn(
+                f"Board pose is stale ({board_pose_age:.2f}s old), refusing "
+                "to move. Wait for game_manager/perception to publish a "
+                "fresh target."
             )
             return False
 
