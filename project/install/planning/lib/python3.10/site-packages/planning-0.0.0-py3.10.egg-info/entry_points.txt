@@ -1,4 +1,5 @@
 [console_scripts]
+game_manager = planning.game_manager:main
 gripper = planning.gripper:main
 ik = planning.ik:main
 main = planning.main:main

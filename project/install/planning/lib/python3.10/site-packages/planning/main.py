@@ -12,7 +12,8 @@ from sensor_msgs.msg import JointState
 from tf2_ros import Buffer, TransformListener
 from scipy.spatial.transform import Rotation as R
 import numpy as np
-from visualization_msgs.msg import Marker  # ✅ NEW
+from visualization_msgs.msg import Marker
+from rcl_interfaces.msg import SetParametersResult
 
 from planning.ik import IKPlanner
 
@@ -37,8 +38,14 @@ class UR7e_CubeGrasp(Node):
         )
 
         self.gripper_cli = self.create_client(Trigger, '/toggle_gripper')
+        self.start_move_srv = self.create_service(
+            Trigger,
+            '/start_robot_move',
+            self.start_robot_move_callback
+        )
 
         self.cube_pose = None
+        self.latest_cube_pose = None
         self.current_plan = None
         self.joint_state = None
 
@@ -50,13 +57,39 @@ class UR7e_CubeGrasp(Node):
         )
 
         self.board_pose = None
+        self.board_pose_time = None
 
         self.ik_planner = IKPlanner()
 
         self.job_queue = []
-        self.approach_offset = 0.185
-        self.grasp_offset = 0.14
-        self.place_down_adjustment = 0.01
+        self.approach_offset = float(
+            self.declare_parameter('approach_offset', 0.185).value
+        )
+        self.grasp_offset = float(
+            self.declare_parameter('grasp_offset', 0.14).value
+        )
+        self.place_down_adjustment = float(
+            self.declare_parameter('place_down_adjustment', 0.01).value
+        )
+        self.place_x_offset = float(
+            self.declare_parameter('place_x_offset', 0.0).value
+        )
+        self.place_y_offset = float(
+            self.declare_parameter('place_y_offset', 0.0).value
+        )
+        self.max_board_pose_age = float(
+            self.declare_parameter('max_board_pose_age', 2.0).value
+        )
+        requested_auto_start = bool(
+            self.declare_parameter('auto_start', False).value
+        )
+        self.auto_start = False
+        if requested_auto_start:
+            self.get_logger().warn(
+                "Ignoring auto_start=true. Robot motion now requires an "
+                "explicit /start_robot_move service call."
+            )
+        self.add_on_set_parameters_callback(self._on_parameter_update)
         self.ur7e_utils_commands = {
             'reset_state': [
                 ['ros2', 'run', 'ur7e_utils', 'reset_state'],
@@ -68,7 +101,6 @@ class UR7e_CubeGrasp(Node):
             ]
         }
 
-        # ✅ NEW: marker publisher
         self.target_marker_pub = self.create_publisher(
             Marker,
             '/place_target_marker',
@@ -103,19 +135,73 @@ class UR7e_CubeGrasp(Node):
 
     def board_pose_callback(self, msg):
         self.board_pose = msg
+        self.board_pose_time = self.get_clock().now()
 
     def joint_state_callback(self, msg: JointState):
         self.joint_state = msg
 
-    def cube_callback(self, cube_pose):
+    def _on_parameter_update(self, params):
+        for param in params:
+            if param.name == 'approach_offset':
+                self.approach_offset = float(param.value)
+            elif param.name == 'grasp_offset':
+                self.grasp_offset = float(param.value)
+            elif param.name == 'place_down_adjustment':
+                self.place_down_adjustment = float(param.value)
+            elif param.name == 'place_x_offset':
+                self.place_x_offset = float(param.value)
+            elif param.name == 'place_y_offset':
+                self.place_y_offset = float(param.value)
+            elif param.name == 'max_board_pose_age':
+                self.max_board_pose_age = float(param.value)
+            elif param.name == 'auto_start':
+                self.auto_start = False
+                if bool(param.value):
+                    self.get_logger().warn(
+                        "Ignoring auto_start=true. Use /start_robot_move to "
+                        "begin motion."
+                    )
+
+        self.get_logger().info(
+            "Updated calibration: "
+            f"place_xy=({self.place_x_offset:.4f},{self.place_y_offset:.4f}), "
+            f"approach={self.approach_offset:.4f}, "
+            f"grasp={self.grasp_offset:.4f}, "
+            f"place_down={self.place_down_adjustment:.4f}"
+        )
+        return SetParametersResult(successful=True)
+
+    def start_robot_move_callback(self, request, response):
+        if self.latest_cube_pose is None:
+            response.success = False
+            response.message = 'No red block pose available yet'
+            return response
+
         if self.cube_pose is not None:
-            return
+            response.success = False
+            response.message = 'Robot move already in progress'
+            return response
+
+        self.get_logger().info('Starting robot move from game_manager')
+        started = self.start_pick_place(self.latest_cube_pose)
+        response.success = bool(started)
+        response.message = (
+            'Robot move started' if started else 'Robot move failed to start'
+        )
+        return response
+
+    def cube_callback(self, cube_pose):
+        self.latest_cube_pose = cube_pose
+
+    def start_pick_place(self, cube_pose):
+        if self.cube_pose is not None:
+            return False
 
         self.rotation_applied = False
 
         if self.joint_state is None:
             self.get_logger().info("No joint state yet, cannot proceed")
-            return
+            return False
 
         # Wait until perception has published the four-corner board target.
         # Do this before latching cube_pose so a later cube message can retry.
@@ -124,7 +210,18 @@ class UR7e_CubeGrasp(Node):
                 "No board pose yet, waiting for /board_test_pose",
                 throttle_duration_sec=2.0
             )
-            return
+            return False
+
+        board_pose_age = (
+            self.get_clock().now() - self.board_pose_time
+        ).nanoseconds / 1e9
+        if board_pose_age > self.max_board_pose_age:
+            self.get_logger().warn(
+                f"Board pose is stale ({board_pose_age:.2f}s old), refusing "
+                "to move. Wait for game_manager/perception to publish a "
+                "fresh target."
+            )
+            return False
 
         self.cube_pose = cube_pose
         q = cube_pose.pose.orientation
@@ -141,43 +238,51 @@ class UR7e_CubeGrasp(Node):
         q_place_rot = R.from_euler('ZYX', [board_place_yaw, np.pi, 0.0])
         q_place = q_place_rot.as_quat()
 
+        pick_x = cube_pose.pose.position.x
+        pick_y = cube_pose.pose.position.y
+        pick_z = cube_pose.pose.position.z
+
         # --- PRE-GRASP ---
+        # Seed from current robot state.
         pre_grasp_joints = self.ik_planner.compute_ik(
             self.joint_state,
-            cube_pose.pose.position.x,
-            cube_pose.pose.position.y,
-            cube_pose.pose.position.z + self.approach_offset,
+            pick_x,
+            pick_y,
+            pick_z + self.approach_offset,
             qx=float(q_final[0]),
             qy=float(q_final[1]),
             qz=float(q_final[2]),
             qw=float(q_final[3])
         )
-
-        if pre_grasp_joints:
-            self.job_queue.append(pre_grasp_joints)
+        if not pre_grasp_joints:
+            self.get_logger().error("Pre-grasp IK failed, aborting")
+            self.cube_pose = None
+            return False
 
         # --- GRASP ---
+        # Seed from pre_grasp: the robot will be at that config when it descends.
         grasp_joints = self.ik_planner.compute_ik(
-            self.joint_state,
-            cube_pose.pose.position.x,
-            cube_pose.pose.position.y,
-            cube_pose.pose.position.z + self.grasp_offset,
+            pre_grasp_joints,
+            pick_x,
+            pick_y,
+            pick_z + self.grasp_offset,
             qx=float(q_final[0]),
             qy=float(q_final[1]),
             qz=float(q_final[2]),
             qw=float(q_final[3])
         )
+        if not grasp_joints:
+            self.get_logger().error("Grasp IK failed, aborting")
+            self.cube_pose = None
+            return False
 
-        if grasp_joints:
-            self.job_queue.append(grasp_joints)
-
+        self.job_queue.append(pre_grasp_joints)
+        self.job_queue.append(grasp_joints)
         self.job_queue.append('toggle_grip')
+        self.job_queue.append(pre_grasp_joints)
 
-        if pre_grasp_joints:
-            self.job_queue.append(pre_grasp_joints)
-
-        board_x = self.board_pose.pose.position.x
-        board_y = self.board_pose.pose.position.y
+        board_x = self.board_pose.pose.position.x + self.place_x_offset
+        board_y = self.board_pose.pose.position.y + self.place_y_offset
         board_z = self.board_pose.pose.position.z
         place_hover_z = board_z + self.approach_offset
         place_z = board_z + self.grasp_offset - self.place_down_adjustment
@@ -187,11 +292,12 @@ class UR7e_CubeGrasp(Node):
             f"z={place_z:.3f}, yaw={board_yaw:.3f}"
         )
 
-        # ✅ VISUALIZE TARGET
         self.publish_place_marker(board_x, board_y, place_z)
 
+        # --- PLACE HOVER ---
+        # Seed from pre_grasp: the robot returns there after lifting off the block.
         place_hover_joints = self.ik_planner.compute_ik(
-            self.joint_state,
+            pre_grasp_joints,
             board_x,
             board_y,
             place_hover_z,
@@ -200,9 +306,16 @@ class UR7e_CubeGrasp(Node):
             qz=float(q_place[2]),
             qw=float(q_place[3])
         )
+        if not place_hover_joints:
+            self.get_logger().error("Place hover IK failed, aborting")
+            self.job_queue = []
+            self.cube_pose = None
+            return False
 
+        # --- PLACE ---
+        # Seed from place_hover: the robot descends from that config.
         place_joints = self.ik_planner.compute_ik(
-            self.joint_state,
+            place_hover_joints,
             board_x,
             board_y,
             place_z,
@@ -211,21 +324,22 @@ class UR7e_CubeGrasp(Node):
             qz=float(q_place[2]),
             qw=float(q_place[3])
         )
-
-        if place_hover_joints and place_joints:
-            self.get_logger().info("Place IK succeeded, adding place sequence")
-            self.job_queue.append(place_hover_joints)
-            self.job_queue.append(place_joints)
-            self.job_queue.append('toggle_grip')
-            self.job_queue.append(place_hover_joints)
-            self.job_queue.append('reset_state')
-            self.job_queue.append('tuck')
-        else:
-            self.get_logger().error("Place IK failed")
+        if not place_joints:
+            self.get_logger().error("Place IK failed, aborting")
             self.job_queue = []
-            return
+            self.cube_pose = None
+            return False
+
+        self.get_logger().info("All IK solutions found, executing sequence")
+        self.job_queue.append(place_hover_joints)
+        self.job_queue.append(place_joints)
+        self.job_queue.append('toggle_grip')
+        self.job_queue.append(place_hover_joints)
+        self.job_queue.append('reset_state')
+        self.job_queue.append('tuck')
 
         self.execute_jobs()
+        return True
 
     def execute_jobs(self):
         if not self.job_queue:
@@ -241,6 +355,8 @@ class UR7e_CubeGrasp(Node):
 
             if traj is None:
                 self.get_logger().error("Failed to plan to position")
+                self.job_queue = []
+                self.cube_pose = None
                 return
 
             self.get_logger().info("Planned to position")
@@ -260,14 +376,29 @@ class UR7e_CubeGrasp(Node):
     def _toggle_gripper(self):
         if not self.gripper_cli.wait_for_service(timeout_sec=5.0):
             self.get_logger().error('Gripper service not available')
-            rclpy.shutdown()
+            self.job_queue = []
+            self.cube_pose = None
             return
 
         req = Trigger.Request()
         future = self.gripper_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+        future.add_done_callback(self._on_gripper_done)
 
-        self.get_logger().info('Gripper toggled.')
+    def _on_gripper_done(self, future):
+        result = future.result()
+        if result is None:
+            self.get_logger().error('Gripper service call failed')
+            self.job_queue = []
+            self.cube_pose = None
+            return
+
+        if not result.success:
+            self.get_logger().error(f'Gripper service failed: {result.message}')
+            self.job_queue = []
+            self.cube_pose = None
+            return
+
+        self.get_logger().info(f'Gripper toggled: {result.message}')
         self.execute_jobs()
 
     def _run_command(self, command):
@@ -317,7 +448,8 @@ class UR7e_CubeGrasp(Node):
 
         if not goal_handle.accepted:
             self.get_logger().error('Trajectory rejected')
-            rclpy.shutdown()
+            self.job_queue = []
+            self.cube_pose = None
             return
 
         self.get_logger().info('Executing...')
@@ -331,6 +463,8 @@ class UR7e_CubeGrasp(Node):
             self.execute_jobs()
         except Exception as e:
             self.get_logger().error(f'Execution failed: {e}')
+            self.job_queue = []
+            self.cube_pose = None
 
 
 def main(args=None):

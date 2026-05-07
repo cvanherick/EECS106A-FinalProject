@@ -8,8 +8,10 @@ setup.py
 ../../build/planning/planning.egg-info/requires.txt
 ../../build/planning/planning.egg-info/top_level.txt
 ../../build/planning/planning.egg-info/zip-safe
+../logic/game_logic.py
 launch/project_bringup.launch.py
 planning/__init__.py
+planning/game_manager.py
 planning/ik.py
 planning/main.py
 planning/static_tf_transform.py

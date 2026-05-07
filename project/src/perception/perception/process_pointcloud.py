@@ -146,6 +146,9 @@ class RealSensePCSubscriber(Node):
         self.robot_target_cells = self.parse_target_cells(
             self.declare_parameter('robot_target_cells', '').value
         )
+        self.piece_yaw_along_col = bool(
+            self.declare_parameter('piece_yaw_along_col', False).value
+        )
 
         # Hardcoded axes. Y is flipped to 1.0 to prevent moving the wrong way.
         self.row_dir = np.array([-1.0, 0.0])
@@ -582,29 +585,58 @@ class RealSensePCSubscriber(Node):
             old_target.action = Marker.DELETE
             marker_array.markers.append(old_target)
 
-        for marker_id, (row, col) in enumerate(self.robot_target_cells[:10]):
-            if not self.is_valid_divot(row, col):
-                continue
+        if self.robot_target_cells:
+            valid_cells = [
+                c for c in self.robot_target_cells if self.is_valid_divot(*c)
+            ]
+            if valid_cells:
+                # Compute the centroid and span of the full piece in world space.
+                phys = [self.game_to_physical_cell(r, c) for r, c in valid_cells]
+                world_pts = np.array([
+                    self.physical_board_to_world(pr, pc)[:2] for pr, pc in phys
+                ])
+                cx, cy = world_pts.mean(axis=0)
 
-            physical_row, physical_col = self.game_to_physical_cell(row, col)
-            piece_marker = Marker()
-            piece_marker.header.frame_id = self.target_frame
-            piece_marker.header.stamp = stamp
-            piece_marker.ns = 'robot_piece_target'
-            piece_marker.id = marker_id
-            piece_marker.type = Marker.CUBE
-            piece_marker.action = Marker.ADD
+                # Span along each board axis (number of cells × step).
+                rows = [r for r, _ in valid_cells]
+                cols = [c for _, c in valid_cells]
+                n_rows = max(1, max(rows) - min(rows) + 1)
+                n_cols = max(1, max(cols) - min(cols) + 1)
 
-            x, y, z = self.physical_board_to_world(physical_row, physical_col)
-            piece_marker.pose.position.x = x
-            piece_marker.pose.position.y = y
-            piece_marker.pose.position.z = z + 0.030
-            piece_marker.pose.orientation.w = 1.0
-            piece_marker.scale.x = self.col_step * 0.72
-            piece_marker.scale.y = self.row_step * 0.72
-            piece_marker.scale.z = 0.010
-            self.set_marker_color(piece_marker, (1.0, 0.28, 0.05, 0.85))
-            marker_array.markers.append(piece_marker)
+                # row_dir is along world-X; col_dir is along world-Y.
+                # scale.x = extent in world-X = row span × row_step
+                # scale.y = extent in world-Y = col span × col_step
+                span_along_row_dir = n_rows * self.row_step
+                span_along_col_dir = n_cols * self.col_step
+
+                # Yaw of the marker cube matches the long axis of the piece.
+                if self.piece_yaw_along_col:
+                    long_axis = self.row_dir
+                else:
+                    long_axis = self.col_dir
+                piece_yaw = np.arctan2(long_axis[1], long_axis[0])
+                half_yaw = piece_yaw / 2.0
+
+                piece_marker = Marker()
+                piece_marker.header.frame_id = self.target_frame
+                piece_marker.header.stamp = stamp
+                piece_marker.ns = 'robot_piece_target'
+                piece_marker.id = 0
+                piece_marker.type = Marker.CUBE
+                piece_marker.action = Marker.ADD
+
+                piece_marker.pose.position.x = float(cx)
+                piece_marker.pose.position.y = float(cy)
+                piece_marker.pose.position.z = float(self.board_z) + 0.030
+                piece_marker.pose.orientation.x = 0.0
+                piece_marker.pose.orientation.y = 0.0
+                piece_marker.pose.orientation.z = float(np.sin(half_yaw))
+                piece_marker.pose.orientation.w = float(np.cos(half_yaw))
+                piece_marker.scale.x = float(span_along_row_dir * 0.72)
+                piece_marker.scale.y = float(span_along_col_dir * 0.72)
+                piece_marker.scale.z = 0.010
+                self.set_marker_color(piece_marker, (1.0, 0.28, 0.05, 0.85))
+                marker_array.markers.append(piece_marker)
 
         self.board_divot_marker_pub.publish(marker_array)
 
@@ -662,7 +694,15 @@ class RealSensePCSubscriber(Node):
         pose.pose.position.y = y
         pose.pose.position.z = z
 
-        board_yaw = np.arctan2(self.row_dir[1], self.row_dir[0])
+        # Align the gripper with the long axis of the piece.
+        # piece_yaw_along_col=True means the piece spans multiple rows (same
+        # col), so its long axis is row_dir. Otherwise it spans multiple cols
+        # and its long axis is col_dir.
+        if self.piece_yaw_along_col:
+            long_axis = self.row_dir
+        else:
+            long_axis = self.col_dir
+        board_yaw = np.arctan2(long_axis[1], long_axis[0])
         half = board_yaw / 2.0
 
         pose.pose.orientation.x = 0.0
@@ -868,6 +908,8 @@ class RealSensePCSubscriber(Node):
             elif param.name == 'robot_target_cells':
                 self.robot_target_cells = self.parse_target_cells(param.value)
                 self.target_is_set = True
+            elif param.name == 'piece_yaw_along_col':
+                self.piece_yaw_along_col = bool(param.value)
             elif param.name == 'target_is_set':
                 self.target_is_set = bool(param.value)
 

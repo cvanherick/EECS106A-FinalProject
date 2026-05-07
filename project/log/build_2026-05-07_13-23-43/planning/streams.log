@@ -1,0 +1,34 @@
+[1.187s] Invoking command in '/home/varin/106a/project/src/planning': PYTHONPATH=/home/varin/106a/project/build/planning/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/varin/106a/project/install/planning/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/planning build --build-base /home/varin/106a/project/build/planning/build install --record /home/varin/106a/project/build/planning/install.log --single-version-externally-managed install_data
+[1.415s] running egg_info
+[1.416s] writing ../../build/planning/planning.egg-info/PKG-INFO
+[1.417s] writing dependency_links to ../../build/planning/planning.egg-info/dependency_links.txt
+[1.417s] writing entry points to ../../build/planning/planning.egg-info/entry_points.txt
+[1.419s] writing requirements to ../../build/planning/planning.egg-info/requires.txt
+[1.420s] writing top-level names to ../../build/planning/planning.egg-info/top_level.txt
+[1.421s] reading manifest file '../../build/planning/planning.egg-info/SOURCES.txt'
+[1.422s] writing manifest file '../../build/planning/planning.egg-info/SOURCES.txt'
+[1.423s] running build
+[1.423s] running build_py
+[1.423s] copying planning/game_manager.py -> /home/varin/106a/project/build/planning/build/lib/planning
+[1.424s] copying planning/main.py -> /home/varin/106a/project/build/planning/build/lib/planning
+[1.424s] running install
+[1.425s] running install_lib
+[1.426s] copying /home/varin/106a/project/build/planning/build/lib/planning/game_manager.py -> /home/varin/106a/project/install/planning/lib/python3.10/site-packages/planning
+[1.426s] copying /home/varin/106a/project/build/planning/build/lib/planning/main.py -> /home/varin/106a/project/install/planning/lib/python3.10/site-packages/planning
+[1.428s] byte-compiling /home/varin/106a/project/install/planning/lib/python3.10/site-packages/planning/game_manager.py to game_manager.cpython-310.pyc
+[1.433s] byte-compiling /home/varin/106a/project/install/planning/lib/python3.10/site-packages/planning/main.py to main.cpython-310.pyc
+[1.436s] byte-compiling /home/varin/106a/project/install/planning/lib/python3.10/site-packages/planning/ik.py to ik.cpython-310.pyc
+[1.437s] running install_data
+[1.437s] copying launch/project_bringup.launch.py -> /home/varin/106a/project/install/planning/share/planning/launch
+[1.437s] running install_egg_info
+[1.441s] removing '/home/varin/106a/project/install/planning/lib/python3.10/site-packages/planning-0.0.0-py3.10.egg-info' (and everything under it)
+[1.442s] Copying ../../build/planning/planning.egg-info to /home/varin/106a/project/install/planning/lib/python3.10/site-packages/planning-0.0.0-py3.10.egg-info
+[1.445s] running install_scripts
+[1.466s] Installing game_manager script to /home/varin/106a/project/install/planning/lib/planning
+[1.467s] Installing gripper script to /home/varin/106a/project/install/planning/lib/planning
+[1.468s] Installing ik script to /home/varin/106a/project/install/planning/lib/planning
+[1.469s] Installing main script to /home/varin/106a/project/install/planning/lib/planning
+[1.469s] Installing tf script to /home/varin/106a/project/install/planning/lib/planning
+[1.470s] Installing transform_cube_pose script to /home/varin/106a/project/install/planning/lib/planning
+[1.471s] writing list of installed files to '/home/varin/106a/project/build/planning/install.log'
+[1.536s] Invoked command in '/home/varin/106a/project/src/planning' returned '0': PYTHONPATH=/home/varin/106a/project/build/planning/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/varin/106a/project/install/planning/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/planning build --build-base /home/varin/106a/project/build/planning/build install --record /home/varin/106a/project/build/planning/install.log --single-version-externally-managed install_data

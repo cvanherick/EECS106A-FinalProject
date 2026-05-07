@@ -1,8 +1,6 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler, EmitEvent
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.event_handlers import OnProcessExit
-from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
@@ -14,7 +12,8 @@ def generate_launch_description():
     # -------------------------
 
     ur_type = LaunchConfiguration("ur_type", default="ur7e")
-    launch_rviz = LaunchConfiguration("launch_rviz", default="true") # make false if you don't want rviz to launch when launching moveit
+    launch_rviz = LaunchConfiguration("launch_rviz", default="true")
+    pointcloud_topic = LaunchConfiguration("pointcloud_topic")
 
     # -------------------------
     # Includes & Nodes
@@ -39,7 +38,16 @@ def generate_launch_description():
         package='perception',
         executable='process_pointcloud',
         name='process_pointcloud',
-        output='screen'
+        output='screen',
+        parameters=[{
+            'pointcloud_topic': pointcloud_topic,
+            'board_rows': 10,
+            'board_cols': 12,
+            'playable_row_offset': 1,
+            'playable_col_offset': 1,
+            'playable_rows': 8,
+            'playable_cols': 10,
+        }]
     )
 
     # Planning TF node
@@ -64,20 +72,11 @@ def generate_launch_description():
         }.items(),
     )
 
-    ik_planner_node = Node(
+    cube_grasp_node = Node(
         package='planning',
-        executable='ik',
-        name='ik_node',
+        executable='main',
+        name='cube_grasp',
         output='screen'
-    )
-
-    # -------------------------
-    # Global shutdown on any process exit
-    # -------------------------
-    shutdown_on_any_exit = RegisterEventHandler(
-        OnProcessExit(
-            on_exit=[EmitEvent(event=Shutdown(reason='A launched process exited'))]
-        )
     )
 
     # -------------------------
@@ -86,12 +85,13 @@ def generate_launch_description():
     return LaunchDescription([
 
         # Actions
+        DeclareLaunchArgument(
+            "pointcloud_topic",
+            default_value="/camera/camera/depth/color/points"
+        ),
         realsense_launch,
         perception_node,
         planning_tf_node,
         moveit_launch, 
-        ik_planner_node, 
-
-        # Global handler (keep at end)
-        shutdown_on_any_exit,
+        cube_grasp_node, 
     ])
