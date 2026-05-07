@@ -223,7 +223,9 @@ class UR7e_CubeGrasp(Node):
 
         board_q = self.board_pose.pose.orientation
         board_yaw = 2.0 * np.arctan2(board_q.z, board_q.w)
-        board_place_yaw = board_yaw
+        # /board_test_pose stores the desired piece long-axis yaw. The gripper
+        # yaw needs to be perpendicular to that axis, matching the pick logic.
+        board_place_yaw = board_yaw + (np.pi / 2.0)
         q_place_rot = R.from_euler('ZYX', [board_place_yaw, np.pi, 0.0])
         q_place = q_place_rot.as_quat()
 
@@ -278,7 +280,8 @@ class UR7e_CubeGrasp(Node):
 
         self.get_logger().info(
             f"Board divot target: x={board_x:.3f}, y={board_y:.3f}, "
-            f"z={place_z:.3f}, yaw={board_yaw:.3f}"
+            f"z={place_z:.3f}, piece_yaw={board_yaw:.3f}, "
+            f"gripper_yaw={board_place_yaw:.3f}"
         )
 
         self.publish_place_marker(board_x, board_y, place_z)
