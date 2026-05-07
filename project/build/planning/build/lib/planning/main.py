@@ -71,12 +71,6 @@ class UR7e_CubeGrasp(Node):
         self.place_down_adjustment = float(
             self.declare_parameter('place_down_adjustment', 0.01).value
         )
-        self.place_x_offset = float(
-            self.declare_parameter('place_x_offset', 0.0).value
-        )
-        self.place_y_offset = float(
-            self.declare_parameter('place_y_offset', 0.0).value
-        )
         self.max_board_pose_age = float(
             self.declare_parameter('max_board_pose_age', 2.0).value
         )
@@ -148,10 +142,6 @@ class UR7e_CubeGrasp(Node):
                 self.grasp_offset = float(param.value)
             elif param.name == 'place_down_adjustment':
                 self.place_down_adjustment = float(param.value)
-            elif param.name == 'place_x_offset':
-                self.place_x_offset = float(param.value)
-            elif param.name == 'place_y_offset':
-                self.place_y_offset = float(param.value)
             elif param.name == 'max_board_pose_age':
                 self.max_board_pose_age = float(param.value)
             elif param.name == 'auto_start':
@@ -164,7 +154,6 @@ class UR7e_CubeGrasp(Node):
 
         self.get_logger().info(
             "Updated calibration: "
-            f"place_xy=({self.place_x_offset:.4f},{self.place_y_offset:.4f}), "
             f"approach={self.approach_offset:.4f}, "
             f"grasp={self.grasp_offset:.4f}, "
             f"place_down={self.place_down_adjustment:.4f}"
@@ -281,8 +270,8 @@ class UR7e_CubeGrasp(Node):
         self.job_queue.append('toggle_grip')
         self.job_queue.append(pre_grasp_joints)
 
-        board_x = self.board_pose.pose.position.x + self.place_x_offset
-        board_y = self.board_pose.pose.position.y + self.place_y_offset
+        board_x = self.board_pose.pose.position.x
+        board_y = self.board_pose.pose.position.y
         board_z = self.board_pose.pose.position.z
         place_hover_z = board_z + self.approach_offset
         place_z = board_z + self.grasp_offset - self.place_down_adjustment
