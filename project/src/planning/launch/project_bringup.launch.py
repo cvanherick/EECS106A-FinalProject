@@ -15,6 +15,7 @@ def generate_launch_description():
 
     ur_type = LaunchConfiguration("ur_type", default="ur7e")
     launch_rviz = LaunchConfiguration("launch_rviz", default="true") # make false if you don't want rviz to launch when launching moveit
+    pointcloud_topic = LaunchConfiguration("pointcloud_topic")
 
     # -------------------------
     # Includes & Nodes
@@ -39,7 +40,16 @@ def generate_launch_description():
         package='perception',
         executable='process_pointcloud',
         name='process_pointcloud',
-        output='screen'
+        output='screen',
+        parameters=[{
+            'pointcloud_topic': pointcloud_topic,
+            'board_rows': 12,
+            'board_cols': 10,
+            'playable_row_offset': 2,
+            'playable_col_offset': 0,
+            'playable_rows': 8,
+            'playable_cols': 10,
+        }]
     )
 
     # Planning TF node
@@ -86,6 +96,10 @@ def generate_launch_description():
     return LaunchDescription([
 
         # Actions
+        DeclareLaunchArgument(
+            "pointcloud_topic",
+            default_value="/camera/camera/depth/color/points"
+        ),
         realsense_launch,
         perception_node,
         planning_tf_node,

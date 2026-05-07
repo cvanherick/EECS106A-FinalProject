@@ -19,6 +19,10 @@ class RealSensePCSubscriber(Node):
             'target_frame',
             'base_link'
         ).value
+        self.pointcloud_topic = self.declare_parameter(
+            'pointcloud_topic',
+            '/camera/camera/depth/color/points'
+        ).value
 
         self.cluster_dist_thresh = 0.003
         self.cluster_min_pts = 50
@@ -56,6 +60,30 @@ class RealSensePCSubscriber(Node):
         self.board_cols = max(
             1,
             int(self.declare_parameter('board_cols', 10).value)
+        )
+        self.playable_row_offset = int(
+            self.declare_parameter('playable_row_offset', 2).value
+        )
+        self.playable_col_offset = int(
+            self.declare_parameter('playable_col_offset', 0).value
+        )
+        self.playable_rows = max(
+            1,
+            int(
+                self.declare_parameter(
+                    'playable_rows',
+                    self.board_rows - 2 * self.playable_row_offset
+                ).value
+            )
+        )
+        self.playable_cols = max(
+            1,
+            int(
+                self.declare_parameter(
+                    'playable_cols',
+                    self.board_cols - 2 * self.playable_col_offset
+                ).value
+            )
         )
 
         self.board_origin = None
@@ -106,7 +134,7 @@ class RealSensePCSubscriber(Node):
 
         self.pc_sub = self.create_subscription(
             PointCloud2,
-            '/camera/camera/depth/color/points',
+            self.pointcloud_topic,
             self.pointcloud_callback,
             10
         )
@@ -132,7 +160,14 @@ class RealSensePCSubscriber(Node):
 
         self.get_logger().info("Red block marker clustering initialized.")
         self.get_logger().info(
-            f"Board defaults: {self.board_rows}x{self.board_cols}, "
+            f"Listening for point cloud on {self.pointcloud_topic}; "
+            f"target frame is {self.target_frame}"
+        )
+        self.get_logger().info(
+            f"Physical board: {self.board_rows}x{self.board_cols}; "
+            f"game board: {self.playable_rows}x{self.playable_cols} "
+            f"offset by ({self.playable_row_offset},{self.playable_col_offset}); "
+            "red 1x1 corner blocks are calibration markers; "
             f"place=({self.place_row:.1f},{self.place_col:.1f}), "
             f"cell={self.CELL_SIZE:.5f} m"
         )
@@ -304,16 +339,19 @@ class RealSensePCSubscriber(Node):
         if not self.is_valid_divot(row, col):
             self.get_logger().warn(
                 f"Requested divot ({row:.2f},{col:.2f}) is outside "
-                f"0-{self.board_rows - 1} rows and "
-                f"0-{self.board_cols - 1} cols",
+                f"0-{self.playable_rows - 1} playable rows and "
+                f"0-{self.playable_cols - 1} playable cols",
                 throttle_duration_sec=2.0
             )
             return None
 
+        physical_row = row + self.playable_row_offset
+        physical_col = col + self.playable_col_offset
+
         xy = (
             self.board_origin
-            + row * self.row_step * self.row_dir
-            + col * self.col_step * self.col_dir
+            + physical_row * self.row_step * self.row_dir
+            + physical_col * self.col_step * self.col_dir
         )
         xy = xy + np.array([self.place_x_offset, self.place_y_offset])
 
@@ -343,8 +381,8 @@ class RealSensePCSubscriber(Node):
 
     def is_valid_divot(self, row, col):
         return (
-            0.0 <= row <= float(self.board_rows - 1)
-            and 0.0 <= col <= float(self.board_cols - 1)
+            0.0 <= row <= float(self.playable_rows - 1)
+            and 0.0 <= col <= float(self.playable_cols - 1)
         )
 
     def publish_board_test_pose(self, row=5, col=5):
@@ -394,18 +432,37 @@ class RealSensePCSubscriber(Node):
 
         cloud = do_transform_cloud(msg, tf)
 
-        raw = pc2.read_points(
-            cloud,
-            field_names=('x', 'y', 'z', 'rgb'),
-            skip_nans=True
-        )
+        cloud_fields = {field.name for field in cloud.fields}
+        if 'rgb' in cloud_fields:
+            color_field = 'rgb'
+        elif 'rgba' in cloud_fields:
+            color_field = 'rgba'
+        else:
+            self.get_logger().warn(
+                f"Point cloud has no rgb/rgba field. Fields: {sorted(cloud_fields)}",
+                throttle_duration_sec=2.0
+            )
+            return
+
+        try:
+            raw = pc2.read_points(
+                cloud,
+                field_names=('x', 'y', 'z', color_field),
+                skip_nans=True
+            )
+        except Exception as ex:
+            self.get_logger().warn(
+                f"Could not read point cloud fields: {ex}",
+                throttle_duration_sec=2.0
+            )
+            return
 
         xyz = np.column_stack((raw['x'], raw['y'], raw['z'])).astype(
             np.float32,
             copy=False
         )
 
-        rgb = raw['rgb'].view(np.uint32)
+        rgb = raw[color_field].view(np.uint32)
         r = (rgb >> 16) & 255
         g = (rgb >> 8) & 255
         b = rgb & 255
@@ -414,6 +471,11 @@ class RealSensePCSubscriber(Node):
         pts = xyz[red_mask]
 
         if len(pts) < self.cluster_min_pts:
+            self.get_logger().info(
+                f"Point cloud received from {msg.header.frame_id}, but only "
+                f"{len(pts)} red points passed threshold",
+                throttle_duration_sec=2.0
+            )
             return
 
         clusters = self.euclidean_clustering(pts)

@@ -38,8 +38,30 @@ class GameManager(Node):
     def __init__(self):
         super().__init__('game_manager')
 
-        self.board_rows = int(self.declare_parameter('board_rows', 12).value)
-        self.board_cols = int(self.declare_parameter('board_cols', 10).value)
+        self.physical_board_rows = int(
+            self.declare_parameter('physical_board_rows', 12).value
+        )
+        self.physical_board_cols = int(
+            self.declare_parameter('physical_board_cols', 10).value
+        )
+        self.playable_row_offset = int(
+            self.declare_parameter('playable_row_offset', 2).value
+        )
+        self.playable_col_offset = int(
+            self.declare_parameter('playable_col_offset', 0).value
+        )
+        self.board_rows = int(
+            self.declare_parameter(
+                'board_rows',
+                self.physical_board_rows - 2 * self.playable_row_offset
+            ).value
+        )
+        self.board_cols = int(
+            self.declare_parameter(
+                'board_cols',
+                self.physical_board_cols - 2 * self.playable_col_offset
+            ).value
+        )
         self.robot_player = int(
             self.declare_parameter('robot_player', 2).value
         )
@@ -54,6 +76,9 @@ class GameManager(Node):
             'start_service',
             '/start_robot_move'
         ).value
+        self.use_click_input = bool(
+            self.declare_parameter('use_click_input', True).value
+        )
 
         self.engine = game_logic.BlokusEngine(
             rows=self.board_rows,
@@ -76,11 +101,24 @@ class GameManager(Node):
             'Game manager ready. Enter human moves as: '
             'piece row col [rotation_index], or q to quit.'
         )
+        if self.use_click_input:
+            self.get_logger().info(
+                'Click input is enabled. A board window will open for each '
+                'human move if Tk is available.'
+            )
+        self.get_logger().info(
+            f'Physical board is {self.physical_board_rows}x'
+            f'{self.physical_board_cols}; playable game board is '
+            f'{self.board_rows}x{self.board_cols}. The red 1x1 corner '
+            'blocks are used only to contextualize the grid in space.'
+        )
 
     def run_gamestate(self):
         while rclpy.ok():
             self.print_board()
-            user_text = input('human move> ').strip()
+            user_text = self.get_human_move_text()
+            if user_text is None:
+                break
             if user_text.lower() in ('q', 'quit', 'exit'):
                 break
             if not self.apply_human_move(user_text):
@@ -93,6 +131,126 @@ class GameManager(Node):
 
             if self.send_robot_target(move):
                 self.apply_robot_move(move)
+
+    def get_human_move_text(self):
+        if not self.use_click_input:
+            return input('human move> ').strip()
+
+        try:
+            move_text = self.open_click_move_window()
+        except Exception as exc:
+            self.get_logger().warn(
+                f'Click input unavailable ({exc}); falling back to terminal.'
+            )
+            return input('human move> ').strip()
+
+        if move_text is None:
+            return None
+        return move_text
+
+    def open_click_move_window(self):
+        import tkinter as tk
+        from tkinter import ttk
+
+        result = {'move': None}
+        selected = {'row': None, 'col': None}
+        piece_names = list(self.human_inventory.keys())
+        if not piece_names:
+            self.get_logger().info('Human has no remaining pieces.')
+            return 'q'
+
+        root = tk.Tk()
+        root.title('Human Move')
+        root.resizable(False, False)
+
+        header = ttk.Frame(root, padding=8)
+        header.grid(row=0, column=0, sticky='ew')
+
+        ttk.Label(header, text='Piece').grid(row=0, column=0, padx=4)
+        piece_var = tk.StringVar(value=piece_names[0])
+        piece_menu = ttk.OptionMenu(header, piece_var, piece_names[0], *piece_names)
+        piece_menu.grid(row=0, column=1, padx=4)
+
+        ttk.Label(header, text='Rotation').grid(row=0, column=2, padx=4)
+        rotation_var = tk.IntVar(value=0)
+        rotation_spin = ttk.Spinbox(
+            header,
+            from_=0,
+            to=7,
+            width=4,
+            textvariable=rotation_var
+        )
+        rotation_spin.grid(row=0, column=3, padx=4)
+
+        status_var = tk.StringVar(value='Click an origin cell.')
+        ttk.Label(header, textvariable=status_var).grid(row=1, column=0, columnspan=4)
+
+        grid_frame = ttk.Frame(root, padding=8)
+        grid_frame.grid(row=1, column=0)
+
+        buttons = {}
+
+        def cell_color(row, col):
+            value = self.engine.board[row, col]
+            if value == self.human_player:
+                return '#9ec5fe'
+            if value == self.robot_player:
+                return '#f4a6a6'
+            return '#ffffff'
+
+        def redraw():
+            for (row, col), button in buttons.items():
+                if row == selected['row'] and col == selected['col']:
+                    button.configure(bg='#ffe082', text=f'{row},{col}')
+                else:
+                    button.configure(bg=cell_color(row, col), text='')
+
+        def select_cell(row, col):
+            selected['row'] = row
+            selected['col'] = col
+            status_var.set(f'Selected row={row}, col={col}')
+            redraw()
+
+        for row in range(self.board_rows):
+            for col in range(self.board_cols):
+                button = tk.Button(
+                    grid_frame,
+                    width=4,
+                    height=2,
+                    relief='solid',
+                    borderwidth=1,
+                    command=lambda r=row, c=col: select_cell(r, c)
+                )
+                button.grid(row=row, column=col)
+                buttons[(row, col)] = button
+
+        redraw()
+
+        footer = ttk.Frame(root, padding=8)
+        footer.grid(row=2, column=0, sticky='ew')
+
+        def submit():
+            row = selected['row']
+            col = selected['col']
+            if row is None or col is None:
+                status_var.set('Pick a board cell first.')
+                return
+
+            piece = piece_var.get()
+            rotation = rotation_var.get()
+            result['move'] = f'{piece} {row} {col} {rotation}'
+            root.destroy()
+
+        def cancel():
+            result['move'] = 'q'
+            root.destroy()
+
+        ttk.Button(footer, text='Use Move', command=submit).grid(row=0, column=0, padx=4)
+        ttk.Button(footer, text='Quit', command=cancel).grid(row=0, column=1, padx=4)
+
+        root.protocol('WM_DELETE_WINDOW', cancel)
+        root.mainloop()
+        return result['move']
 
     def apply_human_move(self, user_text):
         parts = user_text.split()
@@ -203,9 +361,12 @@ class GameManager(Node):
         return False
 
     def start_robot_move(self):
-        if not self.start_client.wait_for_service(timeout_sec=3.0):
+        if not self.start_client.wait_for_service(timeout_sec=10.0):
             self.get_logger().error(
-                f'Start service not available: {self.start_service}'
+                f'Start service not available: {self.start_service}. '
+                'Start the cube_grasp node with `ros2 run planning main`, '
+                'or launch the stack that includes planning main, before '
+                'pressing Enter in game_manager.'
             )
             return False
 
