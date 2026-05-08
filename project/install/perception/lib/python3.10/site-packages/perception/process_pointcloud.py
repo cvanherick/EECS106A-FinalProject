@@ -916,9 +916,9 @@ class RealSensePCSubscriber(Node):
 
         red_pts = xyz[red_mask]
         # Only keep points near the board region
-        x_min, x_max = -1.0, 1.0
-        y_min, y_max = 0.0, 1.0
-        z_min, z_max = -0.50, 0.0
+        x_min, x_max = -0.16, 0.46
+        y_min, y_max = 0.49, 0.90
+        z_min, z_max = -0.24, -0.07
         board_region_mask = (
             (red_pts[:, 0] > x_min) &
             (red_pts[:, 0] < x_max) &

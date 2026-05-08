@@ -365,7 +365,7 @@ class GameManager(Node):
         ]
 
         future = self.param_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=15.0)
 
         if future.result() is None:
             self.get_logger().error('Failed to set robot target parameters')
