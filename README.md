@@ -271,9 +271,3 @@ Helpful checks:
 - Watch `/detected_blocks` to verify red and blue cluster detection.
 - Use RViz to display `/board_divot_markers`, `/place_target_marker`, and the
   point cloud.
-
-## Current Notes
-
-`TODO.md` contains working notes around perception and rotation calibration.
-The project is hardware-facing, so final offsets and board setup may vary with
-the physical robot, camera mount, and game board placement.
