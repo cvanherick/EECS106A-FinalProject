@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1040" viewBox="0 0 1600 1040" role="img" aria-labelledby="title desc">
+  <title id="title">EECS 106A Final Project Codebase Architecture</title>
+  <desc id="desc">Architecture diagram showing the RealSense camera input, ROS 2 perception package, planning package, game logic, MoveIt services, UR7e robot controller, and key ROS topics and services.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #f7f9fc; }
+      .title { fill: #14213d; font: 700 42px Arial, Helvetica, sans-serif; }
+      .subtitle { fill: #4b5563; font: 400 20px Arial, Helvetica, sans-serif; }
+      .section-title { fill: #111827; font: 700 24px Arial, Helvetica, sans-serif; }
+      .label { fill: #111827; font: 700 20px Arial, Helvetica, sans-serif; }
+      .small { fill: #374151; font: 400 16px Arial, Helvetica, sans-serif; }
+      .tiny { fill: #4b5563; font: 400 14px Arial, Helvetica, sans-serif; }
+      .code { fill: #1f2937; font: 400 15px Menlo, Consolas, monospace; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 18; }
+      .box-dark { fill: #172554; stroke: #1e40af; stroke-width: 2; rx: 18; }
+      .box-soft-blue { fill: #eaf2ff; stroke: #7aa7e8; stroke-width: 2; rx: 18; }
+      .box-soft-green { fill: #e9f8ef; stroke: #73c18a; stroke-width: 2; rx: 18; }
+      .box-soft-gold { fill: #fff5df; stroke: #e0a93f; stroke-width: 2; rx: 18; }
+      .box-soft-red { fill: #fff0ed; stroke: #e28a76; stroke-width: 2; rx: 18; }
+      .box-soft-gray { fill: #eef2f7; stroke: #94a3b8; stroke-width: 2; rx: 18; }
+      .dark-label { fill: #ffffff; font: 700 22px Arial, Helvetica, sans-serif; }
+      .dark-small { fill: #dbeafe; font: 400 15px Arial, Helvetica, sans-serif; }
+      .topic { fill: #eef6ff; stroke: #8bb7e8; stroke-width: 1.5; rx: 12; }
+      .service { fill: #f1f9f0; stroke: #8ccf8b; stroke-width: 1.5; rx: 12; }
+      .arrow { stroke: #2563eb; stroke-width: 4; fill: none; marker-end: url(#arrow-blue); }
+      .arrow-control { stroke: #16a34a; stroke-width: 4; fill: none; marker-end: url(#arrow-green); }
+      .arrow-hardware { stroke: #d97706; stroke-width: 4; fill: none; marker-end: url(#arrow-gold); }
+      .arrow-soft { stroke: #64748b; stroke-width: 3; fill: none; marker-end: url(#arrow-gray); stroke-dasharray: 7 7; }
+    </style>
+
+    <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-gold" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#d97706"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1600" height="1040"/>
+
+  <text class="title" x="70" y="72">Vision-Guided Robotic Game Player</text>
+  <text class="subtitle" x="72" y="108">EECS 106A Final Project codebase architecture: perception, game logic, planning, and robot execution</text>
+
+  <rect class="box-soft-gray" x="70" y="150" width="1460" height="800" rx="28"/>
+  <text class="section-title" x="105" y="192">ROS 2 Runtime Pipeline</text>
+
+  <!-- Input hardware -->
+  <rect class="box-soft-gold" x="115" y="250" width="240" height="135" rx="18"/>
+  <text class="label" x="145" y="292">RealSense Camera</text>
+  <text class="small" x="145" y="322">Depth + color stream</text>
+  <text class="code" x="145" y="350">PointCloud2</text>
+
+  <rect class="topic" x="395" y="282" width="250" height="70" rx="14"/>
+  <text class="small" x="425" y="312">/camera/camera/depth/</text>
+  <text class="code" x="425" y="336">color/points</text>
+
+  <!-- Perception package -->
+  <rect class="box-soft-blue" x="705" y="210" width="340" height="300" rx="20"/>
+  <text class="label" x="735" y="252">perception package</text>
+  <text class="small" x="735" y="284">process_pointcloud.py</text>
+  <line x1="735" y1="304" x2="1015" y2="304" stroke="#9cb9e3" stroke-width="1"/>
+  <text class="code" x="735" y="334">- color clustering</text>
+  <text class="code" x="735" y="362">- board calibration</text>
+  <text class="code" x="735" y="390">- block pose estimation</text>
+  <text class="code" x="735" y="418">- target cell projection</text>
+  <text class="code" x="735" y="446">- RViz marker publishing</text>
+  <text class="tiny" x="735" y="478">Publishes pickup and board poses</text>
+
+  <!-- Perception outputs -->
+  <rect class="topic" x="1115" y="205" width="255" height="64" rx="14"/>
+  <text class="code" x="1140" y="243">/cube_pose_blue</text>
+  <rect class="topic" x="1115" y="290" width="255" height="64" rx="14"/>
+  <text class="code" x="1140" y="328">/board_test_pose</text>
+  <rect class="topic" x="1115" y="375" width="255" height="64" rx="14"/>
+  <text class="code" x="1140" y="413">/board_divot_markers</text>
+  <rect class="topic" x="1115" y="460" width="255" height="64" rx="14"/>
+  <text class="code" x="1140" y="498">/detected_blocks</text>
+
+  <!-- Planning main -->
+  <rect class="box-soft-green" x="705" y="590" width="340" height="275" rx="20"/>
+  <text class="label" x="735" y="632">planning package</text>
+  <text class="small" x="735" y="664">main.py + ik.py</text>
+  <line x1="735" y1="684" x2="1015" y2="684" stroke="#93d5a6" stroke-width="1"/>
+  <text class="code" x="735" y="714">- stale pose checks</text>
+  <text class="code" x="735" y="742">- IK service calls</text>
+  <text class="code" x="735" y="770">- motion planning</text>
+  <text class="code" x="735" y="798">- trajectory execution</text>
+  <text class="code" x="735" y="826">- gripper coordination</text>
+
+  <!-- Game manager and logic -->
+  <rect class="box" x="115" y="560" width="280" height="150" rx="18"/>
+  <text class="label" x="145" y="602">game_manager.py</text>
+  <text class="small" x="145" y="633">Human move input</text>
+  <text class="small" x="145" y="661">Robot move selection</text>
+  <text class="code" x="145" y="690">ros2 run planning game_manager</text>
+
+  <rect class="box" x="115" y="765" width="280" height="110" rx="18"/>
+  <text class="label" x="145" y="807">logic/game_logic.py</text>
+  <text class="small" x="145" y="838">Board state + legal moves</text>
+  <text class="small" x="145" y="864">Piece rotations + inventory</text>
+
+  <rect class="service" x="435" y="595" width="210" height="70" rx="14"/>
+  <text class="code" x="462" y="636">/start_robot_move</text>
+
+  <rect class="service" x="435" y="705" width="210" height="78" rx="14"/>
+  <text class="small" x="465" y="735">ROS parameters</text>
+  <text class="code" x="465" y="760">target cells</text>
+
+  <!-- MoveIt and robot -->
+  <rect class="box-soft-red" x="1130" y="610" width="300" height="135" rx="18"/>
+  <text class="label" x="1160" y="652">MoveIt 2</text>
+  <text class="code" x="1160" y="684">/compute_ik</text>
+  <text class="code" x="1160" y="712">/plan_kinematic_path</text>
+
+  <rect class="box-dark" x="1130" y="795" width="300" height="120" rx="18"/>
+  <text class="dark-label" x="1160" y="839">UR7e Robot Arm</text>
+  <text class="dark-small" x="1160" y="870">Joint trajectory controller</text>
+  <text class="dark-small" x="1160" y="895">Gripper trigger service</text>
+
+  <!-- Static transform -->
+  <rect class="box-soft-gray" x="115" y="405" width="280" height="95" rx="18"/>
+  <text class="label" x="145" y="445">static_tf_transform.py</text>
+  <text class="small" x="145" y="475">Camera frame to robot frame</text>
+
+  <!-- Arrows -->
+  <path class="arrow-hardware" d="M355 317 C370 317, 375 317, 395 317"/>
+  <path class="arrow" d="M645 317 C670 317, 675 317, 705 317"/>
+  <path class="arrow" d="M1045 237 C1070 237, 1085 237, 1115 237"/>
+  <path class="arrow" d="M1045 322 C1070 322, 1085 322, 1115 322"/>
+  <path class="arrow" d="M1045 407 C1070 407, 1085 407, 1115 407"/>
+  <path class="arrow" d="M1045 492 C1070 492, 1085 492, 1115 492"/>
+
+  <path class="arrow" d="M1242 269 C1242 555, 1068 610, 1045 650"/>
+  <path class="arrow" d="M1242 354 C1242 575, 1088 640, 1045 695"/>
+  <path class="arrow-control" d="M395 635 C415 635, 420 635, 435 635"/>
+  <path class="arrow-control" d="M645 630 C670 630, 680 630, 705 630"/>
+  <path class="arrow-control" d="M395 820 C425 820, 430 745, 435 745"/>
+  <path class="arrow-control" d="M645 744 C670 744, 680 735, 705 735"/>
+  <path class="arrow-soft" d="M255 765 C255 745, 255 730, 255 710"/>
+  <path class="arrow-soft" d="M395 452 C520 452, 565 362, 705 362"/>
+
+  <path class="arrow-control" d="M1045 678 C1075 678, 1095 678, 1130 678"/>
+  <path class="arrow-hardware" d="M1280 745 C1280 765, 1280 775, 1280 795"/>
+  <path class="arrow-hardware" d="M1045 790 C1075 840, 1095 855, 1130 855"/>
+
+  <!-- Safety callouts -->
+  <rect class="box" x="455" y="850" width="210" height="65" rx="14"/>
+  <text class="small" x="482" y="878">Safety gate:</text>
+  <text class="code" x="482" y="902">fresh poses only</text>
+  <path class="arrow-control" d="M665 882 C700 882, 700 845, 735 830"/>
+
+  <!-- Legend -->
+  <rect class="box" x="105" y="965" width="1390" height="45" rx="14"/>
+  <line x1="135" y1="988" x2="190" y2="988" class="arrow"/>
+  <text class="tiny" x="205" y="993">sensor / pose data</text>
+  <line x1="370" y1="988" x2="425" y2="988" class="arrow-control"/>
+  <text class="tiny" x="440" y="993">control / service / parameters</text>
+  <line x1="715" y1="988" x2="770" y2="988" class="arrow-hardware"/>
+  <text class="tiny" x="785" y="993">hardware execution</text>
+  <line x1="1030" y1="988" x2="1085" y2="988" class="arrow-soft"/>
+  <text class="tiny" x="1100" y="993">TF / dependency relationship</text>
+</svg>
